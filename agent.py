@@ -377,6 +377,9 @@ class Agent():
 
     def behaviour_cloning_hld(self, train_loader, hld_net, num_epochs=500, lr=1e-4):
 
+        #set network in training mode
+        hld_net.train()
+
         # Initialize optimizers for both critics and actor
         hld_optimizer = optim.Adam(hld_net.parameters(), lr=lr)
         
@@ -411,6 +414,39 @@ class Agent():
             mean_hld_loss   /= data_cnt
 
             print(f"Epoch {epoch+1}/{num_epochs}, hld Loss: {mean_hld_loss :.6f}")
+
+    def behaviour_cloning_eval_hld(self, test_loader, hld_net):
+        
+        #set network in evaluation mode
+        hld_net.eval()
+        
+        ce_loss = nn.CrossEntropyLoss()
+
+
+        mean_hld_loss   = 0.
+        data_cnt = 0
+
+        with torch.no_grad():
+            for state, target_action_type in test_loader:
+
+                state              = state.to(self.device)
+                target_action_type = target_action_type.to(self.device)
+                target_action_type = torch.nn.functional.one_hot(target_action_type.long(), 
+                                                                 num_classes = self.N_gripper_action).float()
+
+                # Forward pass through both critics
+                action_type = hld_net(state)
+
+                # Compute loss for both critics
+                hld_net_loss = ce_loss(action_type, target_action_type)
+
+                mean_hld_loss   += hld_net_loss.item()
+            
+                data_cnt += state.shape[0]
+        
+            mean_hld_loss   /= data_cnt
+
+        print(f"hld Loss: {mean_hld_loss :.6f}")
 
 
     def behaviour_cloning(self, train_loader, critic1, critic2, actor, num_epochs=500, is_grasp = True, lr=1e-4):
@@ -497,7 +533,74 @@ class Agent():
 
             print(f"Epoch {epoch+1}/{num_epochs}, Critic1 Loss: {mean_critic1_loss :.6f}, Critic2 Loss: {mean_critic2_loss :.6f}, Actor Loss: {mean_actor_loss :.6f}")
 
-    
+    def behaviour_cloning_eval(self, test_loader,  critic1, critic2, actor, is_grasp = True):
+
+        #set to evaluation mode
+        actor.eval()
+        critic1.eval()
+        critic2.eval()
+
+        total_loss = 0.0
+
+        mse_loss = nn.MSELoss()
+        ce_loss  = nn.CrossEntropyLoss()
+
+        mean_actor_loss   = 0.
+        mean_critic1_loss = 0.
+        mean_critic2_loss = 0.
+
+        data_cnt = 0
+
+        with torch.no_grad():
+            for state, target_action, target_q_value  in test_loader:
+
+                state          = state.to(self.device)
+                target_action  = target_action.to(self.device)
+                target_q_value = target_q_value.to(self.device)
+
+                #compute normalisation factor
+                normalise_factor    = torch.tensor([0.05, 0.05, 0.05, np.deg2rad(30.), 1., 1.]).to(self.device) if is_grasp else torch.tensor([0.05, 0.05, 0.05, np.deg2rad(30.)]).to(self.device)
+
+                #compute action state
+                normalise_target_action = target_action/normalise_factor.view(1, normalise_factor.shape[0])
+            
+                #transform vector into image format
+                target_action_img   = normalise_target_action.view(target_action.shape[0], target_action.shape[1], 1, 1)*torch.ones((target_action.shape[0], target_action.shape[1], 128, 128)).to(self.device)
+
+                #compute action state
+                action_state = torch.concatenate((state, target_action_img), axis = 1).float()
+
+                # Forward pass through both critics
+                q1_pred = critic1(action_state)
+                q2_pred = critic2(action_state)
+
+                target_q_value = target_q_value.unsqueeze(1)
+
+                # Use the actor to get the predicted actions
+                actions, gripper_action, z, normal, gripper_action_probs = actor.get_actions(state)
+
+                # Compute loss for both critics
+                critic1_loss = mse_loss(q1_pred, target_q_value)
+                critic2_loss = mse_loss(q2_pred, target_q_value)
+
+                # compute actor loss 
+                actor_loss = mse_loss(actions.float(), target_action[:,0:4])
+                if is_grasp:
+                    actor_loss += ce_loss(gripper_action_probs, target_action[:,4:])
+
+                data_cnt += state.shape[0]
+                mean_actor_loss   += actor_loss.item()
+                mean_critic1_loss += critic1_loss.item()
+                mean_critic2_loss += critic2_loss.item()
+            
+
+            mean_actor_loss   /= data_cnt
+            mean_critic1_loss /= data_cnt
+            mean_critic2_loss /= data_cnt
+
+            print(f"Critic1 Loss: {mean_critic1_loss :.6f}, Critic2 Loss: {mean_critic2_loss :.6f}, Actor Loss: {mean_actor_loss :.6f}")
+
+
     def gather_guidance_experience(self,
                                    max_episode = 1,
                                    is_debug = True):
