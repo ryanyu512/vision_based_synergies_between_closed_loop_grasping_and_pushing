@@ -1,5 +1,7 @@
 import numpy as np
 
+#TODO [NOTE 21 AUG 2024] temporarily hard code here
+
 #initialise color space
 COLOR_SPACE = np.asarray([[78.0, 121.0, 167.0],   # blue
                           [89.0, 161.0, 79.0],    # green
@@ -30,3 +32,6 @@ HOME_POSE = [-0.1112,
              0.48541, 
              0.26883, 
              0, 0, 0]
+
+#max actions for the networks
+MAX_ACTION = [0.05, 0.05, 0.05, np.deg2rad(30.)]

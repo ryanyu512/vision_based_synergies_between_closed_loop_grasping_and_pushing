@@ -14,6 +14,7 @@ import constants
 
 from env import Env
 from buffer import BufferReplay
+from buffer_hld import BufferReplay_HLD
 from network import Actor, Critic, HDL_Net
 
 #DL related
@@ -24,100 +25,134 @@ from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader, Subset
 
 class DemoDataset(Dataset):
-    def __init__(self, states, actions, q_values):
-        self.states   = states
-        self.actions  = actions
-        self.q_values = q_values
+    def __init__(self, states, next_states, actions, next_actions, rewards, dones, success_masks):
+        self.states        = states
+        self.next_states   = next_states
+        self.actions       = actions
+        self.next_actions  = next_actions
+        self.rewards       = rewards
+        self.dones         = dones
+        self.success_masks = success_masks
 
     def __len__(self):
         return len(self.grasp_states)
 
     def __getitem__(self, index):
-        state   = self.states[index]
-        action  = self.actions[index]
-        q_value = self.q_values[index]
+        state         = self.states[index]
+        next_state    = self.next_states[index]
+        action        = self.actions[index]
+        next_action   = self.next_actions[index]
+        reward        = self.rewards[index]
+        done          = self.dones[index]
+        success_masks = self.success_masks[index]
 
-        return state, action, q_value
+        return state, next_state, action, next_action, reward, done, success_masks
 
 class DemoDatasetHldNet(Dataset):
-    def __init__(self, states, action_types):
-        self.states       = states
-        self.action_types = action_types
+
+    def __init__(self, states, next_states, action_types, rewards, dones):
+        self.states        = states
+        self.next_states   = next_states
+        self.action_types  = action_types
+        self.rewards       = rewards
+        self.dones         = dones
 
     def __len__(self):
         return len(self.grasp_states)
 
     def __getitem__(self, index):
         state        = self.states[index]
+        next_state   = self.next_states[index]
         action_type  = self.action_types[index]
+        reward       = self.rewards[index]
+        done         = self.dones[index]
 
-        return state, action_type
+        return state, next_state, action_type, reward, done
     
-
-#TODO [NOTE 21 AUG 2024]: set learning rate through agent    
-#TODO [NOTE 21 AUG 2024]: add evaluation for behaviour cloning
 class Agent():
 
     def __init__(self, 
                  env,
                  N_action = 4,
                  N_gripper_action = 2,
-                 N_batch  = 64, 
-                 alpha    = 0.2,
-                 tau      = 0.05,
-                 gamma    = 0.95,
+                 N_push_step  = 10,
+                 N_grasp_step = 10,
+                 N_batch_hld  = 32,
+                 N_batch      = 64, 
+                 hld_lr       = 1e-5,
+                 lr           = 1e-4,
+                 alpha        = 0.2,
+                 tau          = 0.05,
+                 gamma        = 0.95,
                  max_memory_size    = 50000,
+                 max_step           = 200,
                  save_step_interval = 10,
-                 is_debug = False):
+                 is_debug           = False):
 
         #initialise inference device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
         print(f"device: {self.device}")
 
         #initialise env
-        self.env      = env
+        self.env = env
         print("[SUCCESS] initialise environment")
 
         #initialise action and action_type dimension
         self.N_action = N_action
+        self.N_push_step  = N_push_step
+        self.N_grasp_step = N_grasp_step 
         self.N_gripper_action = N_gripper_action
 
         #initialise high level network
-        self.hld_net       = HDL_Net(N_input_channels = 1)
+        self.hld_net        = HDL_Net(N_input_channels = 1, lr = lr)
+        self.hld_net_target = HDL_Net(N_input_channels = 1, lr = lr)
 
         #initialise grasp actor
-        self.grasp_actor   = Actor(N_input_channels = 2) #depth image + gripper status
+        self.grasp_actor   = Actor(name = "grasp_actor", N_input_channels = 3, lr = lr) #depth image + gripper status
         #initialise grasp critic network 1
-        self.grasp_critic1 = Critic(N_input_channels = 8) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
+        self.grasp_critic1 = Critic(name = "grasp_critic1", N_input_channels = 9, lr = lr) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
         #initialise grasp ciritc network 2
-        self.grasp_critic2 = Critic(N_input_channels = 8) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
+        self.grasp_critic2 = Critic(name = "grasp_critic2", N_input_channels = 9, lr = lr) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
         #initialise grasp critic network target 1
-        self.grasp_critic1_target = Critic(N_input_channels = 8) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
+        self.grasp_critic1_target = Critic(name = "grasp_critic1_target", N_input_channels = 9, lr = lr) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
         #initialise grasp critic network target 2
-        self.grasp_critic2_target = Critic(N_input_channels = 8) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
+        self.grasp_critic2_target = Critic(name = "grasp_critic2_target", N_input_channels = 9, lr = lr) #depth image + gripper status + dx + dy + dz + dyaw + gripper action
 
         #initialise grasp actor
-        self.push_actor   = Actor(N_input_channels = 2, action_type="push") #depth image + yaw angle 
+        self.push_actor   = Actor(name = "push_actor", N_input_channels = 2, #depth image + yaw angle
+                                  action_type="push", 
+                                  lr = lr)  
         #initialise grasp critic network 1
-        self.push_critic1 = Critic(N_input_channels = 6) #depth image + yaw angle + dx + dy + dz + dyaw 
+        self.push_critic1 = Critic(name = "push_critic1", N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
         #initialise grasp ciritc network 2
-        self.push_critic2 = Critic(N_input_channels = 6) #depth image + yaw angle + dx + dy + dz + dyaw 
+        self.push_critic2 = Critic(name = "push_critic2", N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
         #initialise grasp critic network target 1
-        self.push_critic1_target = Critic(N_input_channels = 6) #depth image + yaw angle + dx + dy + dz + dyaw 
+        self.push_critic1_target = Critic(name = "push_critic1_target", N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
         #initialise grasp critic network target 2
-        self.push_critic2_target = Critic(N_input_channels = 6) #depth image + yaw angle + dx + dy + dz + dyaw 
+        self.push_critic2_target = Critic(name = "push_critic2_target", N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
 
         #soft update to make critic target align with critic
-        self.soft_update()
+        self.soft_update(critic = self.hld_net, target_critic = self.hld_net_target)
+        self.soft_update(critic = self.grasp_critic1, target_critic = self.grasp_critic1_target)
+        self.soft_update(critic = self.grasp_critic2, target_critic = self.grasp_critic2_target)
+        self.soft_update(critic = self.push_critic1, target_critic = self.push_critic1_target)
+        self.soft_update(critic = self.push_critic2, target_critic = self.push_critic2_target)
         print("[SUCCESS] initialise networks")
 
         #initialise buffer replay
-        self.buffer_replay = BufferReplay(max_memory_size = max_memory_size)
+        self.buffer_replay     = BufferReplay(max_memory_size = max_memory_size)
+        self.buffer_replay_hld = BufferReplay_HLD()
         print("[SUCCESS] initialise memory buffer")
         #initialise batch size
         self.N_batch = N_batch
-        #initalise small constant to prevent zero value
+        #initialise batch size for hld-net
+        self.N_batch_hld = N_batch_hld
+        #initialise small constant to prevent zero value
         self.sm_c    = 1e-6
+        #initialise learning rate of low-level action learning rate
+        self.lr      = lr
+        #initialise learning rate of hld learning rate
+        self.hld_lr  = hld_lr
         #initialise temperature factor
         self.alpha   = alpha
         #initialise discount factor
@@ -134,6 +169,9 @@ class Agent():
         #initialise save interval
         self.save_step_interval = save_step_interval
 
+        #initialise max step per episode
+        self.max_step = max_step
+
     def get_raw_data(self, action_type):
 
         _, depth_img         = self.env.get_rgbd_data()
@@ -143,7 +181,7 @@ class Agent():
             yaw_ang        = gripper_tip_ori[2]
             gripper_status = None
         else:
-            yaw_ang        = None
+            yaw_ang        = gripper_tip_ori[2]
             gripper_status = self.env.gripper_status
 
 
@@ -160,16 +198,20 @@ class Agent():
         in_depth_img[in_depth_img < 0] = 0
 
         #scale depth image into range 0 - 1
-        in_depth_img = (in_depth_img.astype(np.float32) - self.env.near_clip_plane)/(self.env.far_clip_plane - self.env.near_clip_plane)
+        max_depth_diff = (self.env.far_clip_plane - self.env.near_clip_plane)
+        offset_depth_img = in_depth_img.astype(np.float32) - self.env.near_clip_plane
+        in_depth_img = offset_depth_img/max_depth_diff
         in_depth_img = np.expand_dims(in_depth_img, axis = 2)
 
         state = copy.copy(in_depth_img)
 
         #turn gripper state into image
+        #GRIPPER_NON_CLOSE_NON_OPEN = 2, largest value
+        max_gripper_action = constants.GRIPPER_NON_CLOSE_NON_OPEN 
         if gripper_state is not None and not np.isnan(gripper_state):
             gripper_state_img  = np.ones_like(in_depth_img)*gripper_state
             #scale gripper_state_img into range 0 - 1
-            gripper_state_img = gripper_state_img.astype(np.float32)/constants.GRIPPER_NON_CLOSE_NON_OPEN #GRIPPER_NON_CLOSE_NON_OPEN = 2, largest value
+            gripper_state_img = gripper_state_img.astype(np.float32)/max_gripper_action 
             #compute states
             state  = np.concatenate((state, gripper_state_img), axis = -1)
 
@@ -189,10 +231,11 @@ class Agent():
     def turn_action2image(self, move_action, gripper_action):
         
         resol = self.env.depth_resol
-        dx_img     = np.ones((1, resol[0], resol[1]))*move_action[0]/5.
-        dy_img     = np.ones((1, resol[0], resol[1]))*move_action[1]/5.
-        dz_img     = np.ones((1, resol[0], resol[1]))*move_action[2]/5.
-        dyaw_image = np.ones((1, resol[0], resol[1]))*move_action[3]/np.deg2rad(30.)
+        max_action = constants.MAX_ACTION
+        dx_img     = np.ones((1, resol[0], resol[1]))*move_action[0]/max_action[0]
+        dy_img     = np.ones((1, resol[0], resol[1]))*move_action[1]/max_action[1]
+        dz_img     = np.ones((1, resol[0], resol[1]))*move_action[2]/max_action[2]
+        dyaw_image = np.ones((1, resol[0], resol[1]))*move_action[3]/max_action[3]
         gc_img     = np.ones((1, resol[0], resol[1]))*np.argmax(gripper_action)
 
         action_img = np.concatenate((dx_img, dy_img, dz_img, dyaw_image, gc_img), axis = 0)
@@ -200,81 +243,33 @@ class Agent():
 
         return action_img
 
-    def soft_update(self, tau = None):
+    def soft_update(self, critic, target_critic, tau = None):
         
         if tau is None:
             tau = 1.
-        else:
-            tau = self.tau
 
-        # Grasp Critic networks
-        for (target_param, param) in zip(self.grasp_critic1_target.parameters(), self.grasp_critic1.parameters()):
+        # Weights
+        for (target_param, param) in zip(target_critic.parameters(), critic.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
-        for (target_param, param) in zip(self.grasp_critic2_target.parameters(), self.grasp_critic2.parameters()):
-            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
-
-        # Push Critic networks
-        for (target_param, param) in zip(self.push_critic1_target.parameters(), self.push_critic1.parameters()):
-            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
-
-        for (target_param, param) in zip(self.push_critic2_target.parameters(), self.push_critic2.parameters()):
-            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
-
-        # Update BatchNorm running statistics
-        for target_layer, source_layer in zip(self.grasp_critic1_target.encoder, self.grasp_critic1.encoder):
+        # BatchNorm2d
+        for target_layer, source_layer in zip(target_critic.encoder, critic.encoder):
             if isinstance(target_layer, torch.nn.BatchNorm2d):
-                # print("grasp_critic1 2d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
+                target_layer.running_mean.copy_(tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean)
+                target_layer.running_var.copy_(tau * source_layer.running_var + (1 - tau) * target_layer.running_var)
 
-        for target_layer, source_layer in zip(self.grasp_critic2_target.encoder, self.grasp_critic2.encoder):
-            if isinstance(target_layer, torch.nn.BatchNorm2d):
-                # print("grasp_critic2 2d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
-
-        for target_layer, source_layer in zip(self.push_critic1_target.encoder, self.push_critic1.encoder):
-            if isinstance(target_layer, torch.nn.BatchNorm2d):
-                # print("push_critic1 2d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
-
-        for target_layer, source_layer in zip(self.push_critic2_target.encoder, self.push_critic2.encoder):
-            if isinstance(target_layer, torch.nn.BatchNorm2d):
-                # print("push_critic2 2d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
-
-        # Update BatchNorm1d running statistics
-        for target_layer, source_layer in zip(self.grasp_critic1_target.fc, self.grasp_critic1.fc):
+        # BatchNorm1d
+        for target_layer, source_layer in zip(target_critic.fc, critic.fc):
             if isinstance(target_layer, torch.nn.BatchNorm1d):
-                # print("grasp_critic1 1d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
-
-        for target_layer, source_layer in zip(self.grasp_critic2_target.fc, self.grasp_critic2.fc):
-            if isinstance(target_layer, torch.nn.BatchNorm1d):
-                # print("grasp_critic2 1d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
-
-        for target_layer, source_layer in zip(self.push_critic1_target.fc, self.push_critic1.fc):
-            if isinstance(target_layer, torch.nn.BatchNorm1d):
-                # print("push_critic1 1d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
-
-        for target_layer, source_layer in zip(self.push_critic2_target.fc, self.push_critic2.fc):
-            if isinstance(target_layer, torch.nn.BatchNorm1d):
-                # print("push_critic2 1d, running_mean, running_var")
-                target_layer.running_mean = tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean
-                target_layer.running_var = tau * source_layer.running_var + (1 - tau) * target_layer.running_var
+                target_layer.running_mean.copy_(tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean)
+                target_layer.running_var.copy_(tau * source_layer.running_var + (1 - tau) * target_layer.running_var)
 
     def get_train_test_dataloader_hld_net(self, exp, train_ratio = 0.8):
 
-        #            0,            1,           2
-        # action_index, depth_states, action_type
+        #          0,            1,            2,       3,                 4,     
+        # priorities, depth_states, action_types, rewards, next_depth_states, 
+        #     5,          6,          7,               8,               9
+        # dones, predict_qs, labeled_qs, predict_next_qs, labeled_next_qs 
 
         #split experience into training (80%) and valuation (20%)
         indices       = np.arange(len(exp[0]))
@@ -283,9 +278,14 @@ class Agent():
         test_indices  = indices[train_size:]
 
         #turn experience into compatible inputs to grasp network
+        # state, next_state, action_type, reward, done, next_q_value
         states        = []
+        next_states   = []
         action_types  = []
+        rewards       = []
+        dones         = []
 
+        # states, target_action_types, rewards, next_q_values 
         for i in range(len(indices)):
             #get state
             state = self.preprocess_state(depth_img     = exp[1][i], 
@@ -294,36 +294,55 @@ class Agent():
             
             states.append(state)
 
+            next_state = self.preprocess_state(depth_img     = exp[4][i], 
+                                               gripper_state = None, 
+                                               yaw_ang       = None)
+            
+            next_states.append(next_state)
+
+            #get action types
             action_type = copy.copy(exp[2][i])
             action_types.append(action_type)
 
-        states       = np.array(states)
-        action_types = np.array(action_types)
+            #get reward
+            reward = copy.copy(exp[3][i])
+            rewards.append(reward)
 
-        states       = torch.FloatTensor(states)
-        action_types = torch.FloatTensor(action_types)
+            #get dones
+            done = copy.copy(exp[5][i])
+            dones.append(done)
 
-        dataset  = DemoDatasetHldNet(states, action_types)
+        states        = torch.FloatTensor(np.array(states))
+        next_states   = torch.FloatTensor(np.array(next_states))
+        action_types  = torch.FloatTensor(np.array(action_types))
+        rewards       = torch.FloatTensor(np.array(rewards))
+        dones         = torch.FloatTensor(np.array(dones))
+
+        dataset  = DemoDatasetHldNet(states, next_states, action_types, rewards, dones)
 
         #create subset
         train_subset = Subset(dataset, train_indices)
         test_subset  = Subset(dataset, test_indices)
 
-        train_loader = DataLoader(train_subset, batch_size = self.N_batch, shuffle = True, 
+        train_loader = DataLoader(train_subset, batch_size = self.N_batch_hld, shuffle = True, 
                                   drop_last=True if train_size > self.N_batch else False)
-        test_loader  = DataLoader( test_subset, batch_size = self.N_batch, shuffle = False)
+        test_loader  = DataLoader( test_subset, batch_size = self.N_batch_hld, shuffle = False)
 
         return train_loader, test_loader
-
-
 
     def get_train_test_dataloader(self,
                                   exp, 
                                   train_ratio = 0.8, 
                                   is_grasp = True):
 
-        #            0,          1,            2,              3,          4,       5,               6,       7,                 8,     9,         10,         11
-        # action_index, priorities, depth_states, gripper_states, yaw_states, actions, gripper_actions, rewards, next_depth_states, dones, predict_qs, labeled_qs
+        #            0,          1,            2,              3,          4,             
+        # action_index, priorities, depth_states, gripper_states, yaw_states, 
+        #       5,               6,            7,                    8,
+        # actions, gripper_actions, next_actions, next_gripper_actions,  
+        #       9,                10,                  11,              12,         
+        # rewards, next_depth_states, next_gripper_states, next_yaw_states, 
+        #    13,         14,         15            16
+        # dones, predict_qs, labeled_qs, success_mask
 
         #split experience into training (80%) and valuation (20%)
         indices       = np.arange(len(exp[0]))
@@ -332,38 +351,58 @@ class Agent():
         test_indices  = indices[train_size:]
 
         #turn experience into compatible inputs to grasp network
-        states   = []
-        actions  = []
-        q_values = []
+        #state, next_state, action, next_action, reward, done, success_masks
+        states        = []
+        next_states   = []
+        actions       = []
+        next_actions  = []
+        rewards       = []
+        dones         = []
+        success_masks = []
+        
         for i in range(len(indices)):
-            #get state
+            #get state and next state
             state = self.preprocess_state(depth_img     = exp[2][i], 
                                           gripper_state = exp[3][i], 
                                           yaw_ang       = exp[4][i])
             
             states.append(state)
 
-            #get action
+            next_state = self.preprocess_state(depth_img     = exp[10][i], 
+                                               gripper_state = exp[11][i], 
+                                               yaw_ang       = exp[12][i])
+            
+            next_states.append(next_state)
+
+            #get action and next action
             if is_grasp:
-                action = np.hstack((exp[5][i], exp[6][i]))
+                action      = np.hstack((exp[5][i], exp[6][i]))
+                next_action = np.hstack((exp[7][i], exp[8][i]))
             else:
-                action = exp[5][i]
+                action      = exp[5][i]
+                next_action = exp[7][i]
 
             actions.append(action)
+            next_actions.append(next_action)
 
-            #get q values
-            q_value = copy.copy(exp[11][i])
-            q_values.append(q_value)
+            #get reward
+            rewards.append(exp[9][i])
 
-        states   = np.array(states)
-        actions  = np.array(actions)
-        q_values = np.array(q_values)
+            #get dones
+            dones.append(exp[13][i])
 
-        states   = torch.FloatTensor(states)
-        actions  = torch.FloatTensor(actions)
-        q_values = torch.FloatTensor(q_values)
+            #get success_masks
+            success_masks.append(exp[16][i])
 
-        dataset  = DemoDataset(states, actions, q_values)
+        states        = torch.FloatTensor(np.array(states))
+        next_state    = torch.FloatTensor(np.array(next_states))
+        actions       = torch.FloatTensor(np.array(actions))
+        next_actions  = torch.FloatTensor(np.array(next_actions))
+        rewards       = torch.FloatTensor(np.array(rewards))
+        dones         = torch.FloatTensor(np.array(dones))
+        success_masks = torch.FloatTensor(np.array(success_masks))
+
+        dataset  = DemoDataset(states, next_state, actions, next_actions, rewards, dones, success_masks)
 
         #create subset
         train_subset = Subset(dataset, train_indices)
@@ -375,136 +414,221 @@ class Agent():
 
         return train_loader, test_loader
 
-    def behaviour_cloning_hld(self, train_loader, hld_net, num_epochs=500, lr=1e-4):
+    def behaviour_cloning_hld(self, train_loader, test_loader, hld_net, hld_net_target, num_epochs=500):
 
-        #set network in training mode
-        hld_net.train()
-
-        # Initialize optimizers for both critics and actor
-        hld_optimizer = optim.Adam(hld_net.parameters(), lr=lr)
+        #initialise optimizers for both critics and actor
+        hld_optimizer = optim.Adam(hld_net.parameters(), lr=self.hld_lr)
         
-        ce_loss = nn.CrossEntropyLoss()
+        #initilialise loss function
+        mse_loss  = nn.MSELoss()
+
+        #initialise best evaluation loss
+        best_hld_loss_eval = np.inf
 
         for epoch in range(num_epochs):
             mean_hld_loss   = 0.
 
-            data_cnt = 0
-            for state, target_action_type in train_loader:
+            batch_cnt = 0
 
-                state              = state.to(self.device)
-                target_action_type = target_action_type.to(self.device)
-                target_action_type = torch.nn.functional.one_hot(target_action_type.long(), 
-                                                                 num_classes = self.N_gripper_action).float()
+            #set network in training mode
+            hld_net.train()
 
-                # Forward pass through both critics
-                action_type = hld_net(state)
+            for states, next_states, target_action_types, rewards, dones in train_loader:            
 
-                # Compute loss for both critics
-                hld_net_loss = ce_loss(action_type, target_action_type)
+                states              = states.to(self.device)
+                next_states         = next_states.to(self.device)
+                target_action_types = target_action_types.to(self.device)
+                rewards             = rewards.unsqueeze(1).to(self.device)
+                dones               = dones.unsqueeze(1).to(self.device)
+
+                # compute current q - values
+                batch_indices = torch.arange(states.size(0)).long().to(self.device)
+                qs = hld_net(states)[batch_indices, target_action_types.long()]
+
+                # Compute target q - values
+                with torch.no_grad():
+                    next_qs   = torch.max(hld_net_target(next_states), dim=1)[0]
+                    target_qs = rewards + self.gamma * (1 - dones) * next_qs
+
+                hld_net_loss = mse_loss(qs, target_qs)
 
                 # update hld-net
                 hld_optimizer.zero_grad()
                 hld_net_loss.backward()
                 hld_optimizer.step()
 
-                mean_hld_loss   += hld_net_loss.item()
+                mean_hld_loss += hld_net_loss.item()
             
-                data_cnt += state.shape[0]
+                batch_cnt += 1
+
+                #soft update target network 
+                self.soft_update(critic = hld_net, target_critic = hld_net_target, tau = self.tau)
         
-            mean_hld_loss   /= data_cnt
+            mean_hld_loss /= batch_cnt
 
-            print(f"Epoch {epoch+1}/{num_epochs}, hld Loss: {mean_hld_loss :.6f}")
+            hld_loss_eval = self.behaviour_cloning_eval_hld(test_loader, hld_net, hld_net_target)
 
-    def behaviour_cloning_eval_hld(self, test_loader, hld_net):
+            if self.is_debug:
+                loss_msg  = f"Epoch: {epoch+1}/{num_epochs} "
+                loss_msg += f"hld loss: {mean_hld_loss :.6f} "
+                loss_msg += f"hld loss eval: {hld_loss_eval :.6f}/{best_hld_loss_eval :.6f}"
+                print(loss_msg)
+
+            if (hld_loss_eval < best_hld_loss_eval):
+               best_hld_loss_eval = hld_loss_eval
+
+               hld_net.save_checkpoint()
+               hld_net_target.save_checkpoint()
+
+               print("[SUCCESS] save model!")
+
+    def behaviour_cloning_eval_hld(self, test_loader, hld_net, hld_net_target):
         
         #set network in evaluation mode
         hld_net.eval()
         
-        ce_loss = nn.CrossEntropyLoss()
+        #initialise loss funciton
+        mse_loss  = nn.MSELoss()
 
-
+        #initialise mean loss value
         mean_hld_loss   = 0.
-        data_cnt = 0
+
+        #initialise batch counter
+        batch_cnt = 0
 
         with torch.no_grad():
-            for state, target_action_type in test_loader:
 
-                state              = state.to(self.device)
-                target_action_type = target_action_type.to(self.device)
-                target_action_type = torch.nn.functional.one_hot(target_action_type.long(), 
-                                                                 num_classes = self.N_gripper_action).float()
+            for states, next_states, target_action_types, rewards, dones in test_loader:            
 
-                # Forward pass through both critics
-                action_type = hld_net(state)
+                states              = states.to(self.device)
+                next_states         = next_states.to(self.device)
+                target_action_types = target_action_types.to(self.device)
+                rewards             = rewards.unsqueeze(1).to(self.device)
+                dones               = dones.unsqueeze(1).to(self.device)
 
-                # Compute loss for both critics
-                hld_net_loss = ce_loss(action_type, target_action_type)
+                # compute current q - values
+                batch_indices = torch.arange(states.size(0)).long().to(self.device)
+                qs = hld_net(states)[batch_indices, target_action_types.long()]
 
-                mean_hld_loss   += hld_net_loss.item()
+                # Compute target q - values
+                with torch.no_grad():
+                    next_qs   = torch.max(hld_net_target(next_states), dim=1)[0]
+                    target_qs = rewards + self.gamma * (1 - dones) * next_qs
+
+                hld_net_loss = mse_loss(qs, target_qs)
+
+                mean_hld_loss += hld_net_loss.item()
             
-                data_cnt += state.shape[0]
-        
-            mean_hld_loss   /= data_cnt
+                batch_cnt += 1
 
-        print(f"hld Loss: {mean_hld_loss :.6f}")
+        mean_hld_loss /= batch_cnt
+
+        return mean_hld_loss
 
 
-    def behaviour_cloning(self, train_loader, critic1, critic2, actor, num_epochs=500, is_grasp = True, lr=1e-4):
-
-        #set networks to training mode
-        actor.train()
-        critic1.train()
-        critic2.train()
+    def behaviour_cloning(self, train_loader, test_loader, critic1, critic2, target_critic1, target_critic2, actor, num_epochs=500, is_grasp = True):
+        #TODO [FINISH 25 AUG 2024]: handle failure experience 
 
         # Initialize optimizers for both critics and actor
-        critic1_optimizer = optim.Adam(critic1.parameters(), lr=lr)
-        critic2_optimizer = optim.Adam(critic2.parameters(), lr=lr)
-        actor_optimizer   = optim.Adam(actor.parameters(), lr=lr)
+        critic1_optimizer = optim.Adam(critic1.parameters(), lr=self.lr)
+        critic2_optimizer = optim.Adam(critic2.parameters(), lr=self.lr)
+        actor_optimizer   = optim.Adam(actor.parameters(), lr=self.lr)
         
         mse_loss = nn.MSELoss()
-        ce_loss  = nn.CrossEntropyLoss()
+        mse_loss_no_reduce = nn.MSELoss(reduction = 'none')
+        ce_loss_no_reduce  = nn.CrossEntropyLoss(reduction='none')
 
+        best_actor_loss_eval   = np.inf
+        best_critic1_loss_eval = np.inf
+        best_critic2_loss_eval = np.inf
+
+        #get action max range
+        max_action = constants.MAX_ACTION
         for epoch in range(num_epochs):
+
+            #set networks to training mode
+            actor.train()
+            critic1.train()
+            critic2.train()
+
+            #initialise mean loss for each episode
             mean_actor_loss   = 0.
             mean_critic1_loss = 0.
             mean_critic2_loss = 0.
 
-            data_cnt = 0
-            for state, target_action, target_q_value in train_loader:
+            #initialise batch counter
+            batch_cnt = 0
 
-                state          = state.to(self.device)
-                target_action  = target_action.to(self.device)
-                target_q_value = target_q_value.to(self.device)
+            for state, next_state, target_action, next_target_action, reward, done, success_mask in train_loader:
+
+                state              = state.to(self.device)
+                next_state         = next_state.to(self.device)
+                target_action      = target_action.to(self.device)
+                next_target_action = next_target_action.to(self.device)
+                reward             = reward.unsqueeze(1).to(self.device)
+                done               = done.unsqueeze(1).to(self.device)
+                success_mask       = success_mask.to(self.device)
 
                 #compute normalisation factor
-                normalise_factor    = torch.tensor([0.05, 0.05, 0.05, np.deg2rad(30.), 1., 1.]).to(self.device) if is_grasp else torch.tensor([0.05, 0.05, 0.05, np.deg2rad(30.)]).to(self.device)
+                if is_grasp:
+                    normalise_factor    = torch.tensor(max_action + [1., 1.]).to(self.device) 
+                else:
+                    normalise_factor    = torch.tensor(max_action).to(self.device)
 
                 #compute action state
                 normalise_target_action = target_action/normalise_factor.view(1, normalise_factor.shape[0])
-            
+                normalise_next_target_action = next_target_action/normalise_factor.view(1, normalise_factor.shape[0])
+
                 #transform vector into image format
-                target_action_img   = normalise_target_action.view(target_action.shape[0], target_action.shape[1], 1, 1)*torch.ones((target_action.shape[0], target_action.shape[1], 128, 128)).to(self.device)
+                ta_shape = target_action.shape
+                torch_ones = torch.ones((ta_shape[0], ta_shape[1], 128, 128)).to(self.device)
+                target_action_img   = normalise_target_action.view(ta_shape[0], ta_shape[1], 1, 1)*torch_ones
+
+                next_ta_shape = next_target_action.shape
+                torch_ones = torch.ones((next_ta_shape[0], next_ta_shape[1], 128, 128)).to(self.device)
+                next_target_action_img   = normalise_next_target_action.view(next_ta_shape[0], next_ta_shape[1], 1, 1)*torch_ones
+
+                #compute next action state
+                next_action_state = torch.concatenate((next_state, next_target_action_img), axis = 1).float()
+
+                #forward pass through both critics
+                with torch.no_grad():
+                    next_q1  = target_critic1(next_action_state)
+                    next_q2  = target_critic2(next_action_state)
+                    next_q   = torch.min(next_q1, next_q2)
+                    target_q = reward + (1 - done)*self.gamma*next_q
 
                 #compute action state
                 action_state = torch.concatenate((state, target_action_img), axis = 1).float()
-
-                # Forward pass through both critics
-                q1_pred = critic1(action_state)
-                q2_pred = critic2(action_state)
-
-                target_q_value = target_q_value.unsqueeze(1)
-
+ 
+                q1 = critic1(action_state)
+                q2 = critic2(action_state)
+                
                 # Use the actor to get the predicted actions
                 actions, gripper_action, z, normal, gripper_action_probs = actor.get_actions(state)
 
+                #normalise actions
+                normalised_actions = actions/normalise_factor[0:4].view(1, normalise_factor[0:4].shape[0])
+
                 # Compute loss for both critics
-                critic1_loss = mse_loss(q1_pred, target_q_value)
-                critic2_loss = mse_loss(q2_pred, target_q_value)
+                critic1_loss = mse_loss(q1, target_q)
+                critic2_loss = mse_loss(q2, target_q)
 
                 # compute actor loss 
-                actor_loss = mse_loss(actions.float(), target_action[:,0:4])
+                move_loss  = mse_loss_no_reduce(normalised_actions.float(), normalise_target_action[:,0:4].float())
+                move_loss  = torch.sum(move_loss, dim=1)* success_mask
+
+                actor_loss = move_loss
                 if is_grasp:
-                    actor_loss += ce_loss(gripper_action_probs, target_action[:,4:])
+                    target_gripper_action_class = target_action[:, 4:].argmax(dim=1)
+                    gripper_action_loss = ce_loss_no_reduce(gripper_action_probs, target_gripper_action_class)* success_mask 
+                    actor_loss += gripper_action_loss
+                
+                actor_loss_denominator = success_mask.sum()
+                if actor_loss_denominator.item() > 0:
+                    actor_loss =  actor_loss.sum()/actor_loss_denominator
+                else:
+                    actor_loss = actor_loss.mean()
 
                 # update critic 1
                 critic1_optimizer.zero_grad()
@@ -525,124 +649,238 @@ class Agent():
                 mean_critic1_loss += critic1_loss.item()
                 mean_critic2_loss += critic2_loss.item()
             
-                data_cnt += state.shape[0]
+                batch_cnt += 1
+
+                #TODO [FINISH 26 AUG 2024]: copy critic network to target critic network
+                self.soft_update(critic = critic1, target_critic = target_critic1, tau = self.tau)
+                self.soft_update(critic = critic2, target_critic = target_critic2, tau = self.tau)
         
-            mean_actor_loss   /= data_cnt
-            mean_critic1_loss /= data_cnt
-            mean_critic2_loss /= data_cnt
+            mean_actor_loss   /= batch_cnt
+            mean_critic1_loss /= batch_cnt
+            mean_critic2_loss /= batch_cnt
 
-            print(f"Epoch {epoch+1}/{num_epochs}, Critic1 Loss: {mean_critic1_loss :.6f}, Critic2 Loss: {mean_critic2_loss :.6f}, Actor Loss: {mean_actor_loss :.6f}")
+            critic1_loss_eval, critic2_loss_eval, actor_loss_eval = self.behaviour_cloning_eval(test_loader,  critic1, critic2, target_critic1, target_critic2, actor, is_grasp)
 
-    def behaviour_cloning_eval(self, test_loader,  critic1, critic2, actor, is_grasp = True):
+            if self.is_debug:
+                print(f"Epoch: {epoch+1}/{num_epochs} ")
+
+                train_loss_msg  = "[TRAIN] "
+                train_loss_msg += f"critic1 loss: {mean_critic1_loss :.6f}, critic2 loss: {mean_critic2_loss :.6f}, actor Loss: {mean_actor_loss :.6f} "
+                print(train_loss_msg)
+
+                critic_loss_eval_msg  = "[EVAL] "
+                critic_loss_eval_msg += f"critic1 loss eval: {critic1_loss_eval :.6f}/{best_critic1_loss_eval :.6f} "
+                critic_loss_eval_msg += f"critic2 loss eval: {critic2_loss_eval :.6f}/{best_critic2_loss_eval :.6f} "
+                print(critic_loss_eval_msg)
+
+                actor_loss_eval_msg  = "[EVAL] "
+                actor_loss_eval_msg += f"actor loss eval: {actor_loss_eval :.6f}/{best_actor_loss_eval :.6f} "
+                print(actor_loss_eval_msg)
+
+            if critic1_loss_eval < best_critic1_loss_eval:
+               
+                best_critic1_loss_eval = critic1_loss_eval
+                critic1.save_checkpoint()
+                target_critic1.save_checkpoint()
+                print("[SUCCESS] save critic1 model!")
+
+            if critic2_loss_eval < best_critic2_loss_eval:
+               
+                best_critic2_loss_eval = critic2_loss_eval
+                critic2.save_checkpoint()
+                target_critic2.save_checkpoint()
+                print("[SUCCESS] save critic2 model!")
+
+            if (actor_loss_eval < best_actor_loss_eval):
+               
+                best_actor_loss_eval  = actor_loss_eval
+                actor.save_checkpoint()
+
+                print("[SUCCESS] save actor model!")
+
+    def behaviour_cloning_eval(self, test_loader,  critic1, critic2, target_critic1, target_critic2, actor, is_grasp = True):
 
         #set to evaluation mode
         actor.eval()
         critic1.eval()
         critic2.eval()
 
-        total_loss = 0.0
-
+        #initialise loss function
         mse_loss = nn.MSELoss()
-        ce_loss  = nn.CrossEntropyLoss()
+        mse_loss_no_reduce = nn.MSELoss(reduction = 'none')
+        ce_loss_no_reduce  = nn.CrossEntropyLoss(reduction='none')
 
+        #initialise mean loss
         mean_actor_loss   = 0.
         mean_critic1_loss = 0.
         mean_critic2_loss = 0.
 
-        data_cnt = 0
+        #initialise batch ounter
+        batch_cnt = 0
+
+        #define max action range
+        max_action = constants.MAX_ACTION
 
         with torch.no_grad():
-            for state, target_action, target_q_value  in test_loader:
 
-                state          = state.to(self.device)
-                target_action  = target_action.to(self.device)
-                target_q_value = target_q_value.to(self.device)
+            for state, next_state, target_action, next_target_action, reward, done, success_mask in test_loader:
+
+                state              = state.to(self.device)
+                next_state         = next_state.to(self.device)
+                target_action      = target_action.to(self.device)
+                next_target_action = next_target_action.to(self.device)
+                reward             = reward.to(self.device)
+                done               = done.to(self.device)
+                success_mask       = success_mask.to(self.device)
 
                 #compute normalisation factor
-                normalise_factor    = torch.tensor([0.05, 0.05, 0.05, np.deg2rad(30.), 1., 1.]).to(self.device) if is_grasp else torch.tensor([0.05, 0.05, 0.05, np.deg2rad(30.)]).to(self.device)
+                if is_grasp:
+                    normalise_factor    = torch.tensor(max_action + [1., 1.]).to(self.device) 
+                else:
+                    normalise_factor    = torch.tensor(max_action).to(self.device)
 
                 #compute action state
                 normalise_target_action = target_action/normalise_factor.view(1, normalise_factor.shape[0])
-            
+                normalise_next_target_action = next_target_action/normalise_factor.view(1, normalise_factor.shape[0])
+
                 #transform vector into image format
-                target_action_img   = normalise_target_action.view(target_action.shape[0], target_action.shape[1], 1, 1)*torch.ones((target_action.shape[0], target_action.shape[1], 128, 128)).to(self.device)
+                ta_shape = target_action.shape
+                torch_ones = torch.ones((ta_shape[0], ta_shape[1], 128, 128)).to(self.device)
+                target_action_img   = normalise_target_action.view(ta_shape[0], ta_shape[1], 1, 1)*torch_ones
+
+                next_ta_shape = next_target_action.shape
+                torch_ones = torch.ones((next_ta_shape[0], next_ta_shape[1], 128, 128)).to(self.device)
+                next_target_action_img   = normalise_next_target_action.view(next_ta_shape[0], next_ta_shape[1], 1, 1)*torch_ones
+
+                #compute next action state
+                next_action_state = torch.concatenate((next_state, next_target_action_img), axis = 1).float()
+
+                #forward pass through both critics
+                with torch.no_grad():
+                    next_q1  = target_critic1(next_action_state)
+                    next_q2  = target_critic2(next_action_state)
+                    next_q   = torch.min(next_q1, next_q2)
+                    target_q = reward + (1 - done)*self.gamma*next_q
 
                 #compute action state
                 action_state = torch.concatenate((state, target_action_img), axis = 1).float()
-
-                # Forward pass through both critics
-                q1_pred = critic1(action_state)
-                q2_pred = critic2(action_state)
-
-                target_q_value = target_q_value.unsqueeze(1)
+ 
+                q1 = critic1(action_state)
+                q2 = critic2(action_state)
 
                 # Use the actor to get the predicted actions
                 actions, gripper_action, z, normal, gripper_action_probs = actor.get_actions(state)
 
+                #normalise actions
+                normalised_actions = actions/normalise_factor[0:4].view(1, normalise_factor[0:4].shape[0])
+
                 # Compute loss for both critics
-                critic1_loss = mse_loss(q1_pred, target_q_value)
-                critic2_loss = mse_loss(q2_pred, target_q_value)
+                critic1_loss = mse_loss(q1, target_q)
+                critic2_loss = mse_loss(q2, target_q)
 
                 # compute actor loss 
-                actor_loss = mse_loss(actions.float(), target_action[:,0:4])
-                if is_grasp:
-                    actor_loss += ce_loss(gripper_action_probs, target_action[:,4:])
+                move_loss  = mse_loss_no_reduce(normalised_actions.float(), normalise_target_action[:,0:4].float())
+                move_loss  = torch.sum(move_loss, dim=1)* success_mask
 
-                data_cnt += state.shape[0]
+                actor_loss = move_loss
+                if is_grasp:
+                    target_gripper_action_class = target_action[:, 4:].argmax(dim=1)
+                    gripper_action_loss = ce_loss_no_reduce(gripper_action_probs, target_gripper_action_class)* success_mask 
+                    actor_loss += gripper_action_loss
+                
+                actor_loss_denominator = success_mask.sum()
+                if actor_loss_denominator.item() > 0:
+                    actor_loss =  actor_loss.sum()/actor_loss_denominator
+                else:
+                    actor_loss = actor_loss.mean()
+
                 mean_actor_loss   += actor_loss.item()
                 mean_critic1_loss += critic1_loss.item()
                 mean_critic2_loss += critic2_loss.item()
+
+                batch_cnt += 1
             
-
-            mean_actor_loss   /= data_cnt
-            mean_critic1_loss /= data_cnt
-            mean_critic2_loss /= data_cnt
-
-            print(f"Critic1 Loss: {mean_critic1_loss :.6f}, Critic2 Loss: {mean_critic2_loss :.6f}, Actor Loss: {mean_actor_loss :.6f}")
+            mean_actor_loss   /= batch_cnt
+            mean_critic1_loss /= batch_cnt
+            mean_critic2_loss /= batch_cnt
+        
+        return mean_critic1_loss, mean_critic2_loss, mean_actor_loss
 
 
     def gather_guidance_experience(self,
-                                   max_episode = 1,
                                    is_debug = True):
 
+        if self.buffer_replay.is_full:
+            print("[SUCCESS] buffer is full")
+            return
+
         #start trainiing/evaluation loop
-        for episode in range(max_episode):
+        episode = 0
+        while not self.buffer_replay.is_full:
 
             #initialise episode data
             step = 0
             ep_r = 0.
             done = False
             action_type = None
+            previous_action_type = None
             is_success_grasp = False
-            while not done and not self.buffer_replay.is_full:
-                
-                print(f"==== episode: {episode} step: {step} ====")
+
+            #initialise hld-net experience in one episode
+
+            hld_depth_states      = []
+            hld_action_types      = []
+            hld_rewards           = []
+            hld_next_depth_states = []
+            hld_dones             = []
+
+            #reset environment
+            self.env.reset(reset_item = True)
+
+            while not done and step < self.max_step and not self.buffer_replay.is_full:
+
+                print(f"==== episode: {episode} ====")
 
                 #action selection
-                delta_moves = self.env.grasp_guidance_generation()
-                
-                #the 2nd condition prevent stucking in impossible grasping action
-                if len(delta_moves) == 0:
-                    delta_moves = self.env.push_guidance_generation()
+                delta_moves_grasp = self.env.grasp_guidance_generation()
+                delta_moves_push  = self.env.push_guidance_generation()
+
+                #no grasp move or (previous grasp is fail and have push move)
+                delta_moves = []
+                if len(delta_moves_grasp) == 0:
+                    print("[ACTION CHOICE] no grasp options => try to push!")
                     action_type = constants.PUSH
+                    delta_moves = delta_moves_push
+                elif (previous_action_type == constants.GRASP and not is_success_grasp and len(delta_moves_push) > 0):
+                    print("[ACTION CHOICE] try to push after grasping fails")
+                    action_type = constants.PUSH
+                    delta_moves = delta_moves_push
                 else:
+                    print("[ACTION CHOICE] grasp!")
                     action_type = constants.GRASP
+                    delta_moves = delta_moves_grasp
 
                 if len(delta_moves) == 0:
-                    done     = True
-            
-                depth_states      = np.zeros((len(delta_moves), self.env.depth_resol[0], self.env.depth_resol[1]))
-                gripper_states    = np.zeros(len(delta_moves))
-                yaw_states        = np.zeros(len(delta_moves))
-                actions           = np.zeros((len(delta_moves), self.N_action))
-                gripper_actions   = np.zeros((len(delta_moves), self.N_gripper_action))
-                action_types      = np.zeros(len(delta_moves))
-                rewards           = np.zeros(len(delta_moves))
-                next_depth_states = np.zeros((len(delta_moves), self.env.depth_resol[0], self.env.depth_resol[1]))
-                dones             = np.zeros(len(delta_moves)).astype(bool)
-                labeled_qs        = np.zeros(len(delta_moves))
+                    done = True
 
+                #initialise memory space for storing a complete set of actions
+                depth_states         = []
+                gripper_states       = []
+                yaw_states           = []
+                actions              = []
+                gripper_actions      = []
+                next_actions         = []
+                next_gripper_actions = []
+                action_types         = []
+                rewards              = []
+                next_depth_states    = []
+                next_gripper_states  = []
+                next_yaw_states      = []
+                dones                = []
+                
                 for i in range(len(delta_moves)):
+
+                    print(f"==== step: {step} N_pickable_item: {self.env.N_pickable_item} ====")
 
                     #get raw data
                     depth_img, gripper_state, yaw_state = self.get_raw_data(action_type)
@@ -656,15 +894,14 @@ class Agent():
                     move   = np.array(delta_moves[i])
                     n_move = np.array(delta_moves[i+1] if i+1 < len(delta_moves) else [0,0,0,0,move[-2],move[-1]])
 
-                    #select action
                     action,   action_type,  gripper_action             = np.array(move[0:self.N_action]), action_type,   np.array(move[-2:])
                     next_action, next_action_type, next_gripper_action = np.array(n_move[0:self.N_action]), action_type, np.array(n_move[-2:])
 
                     gripper_action = torch.FloatTensor(gripper_action).unsqueeze(0).to(self.device)
-                    action  = torch.FloatTensor(action).unsqueeze(0).to(self.device)
+                    action = torch.FloatTensor(action).unsqueeze(0).to(self.device)
                     
                     next_gripper_action = torch.FloatTensor(next_gripper_action).unsqueeze(0).to(self.device)
-                    next_action         = torch.FloatTensor(next_action).unsqueeze(0).to(self.device)
+                    next_action = torch.FloatTensor(next_action).unsqueeze(0).to(self.device)
 
                     #step
                     reward, is_success_grasp = self.env.step(action_type, 
@@ -672,30 +909,37 @@ class Agent():
                                                              action.to(torch.device('cpu')).detach().numpy()[0][3], 
                                                              is_open_gripper = True if move[4] == 1 else False)
 
-                    #get raw data
+                    #get raw data after actions
                     next_depth_img, next_gripper_state, next_yaw_state = self.get_raw_data(action_type)
 
-                    print(f"[STEP]: {step} [ACTION TYPE]: {action_type} [REWARD]: {reward}") if is_debug else None
-                    print(f"[MOVE]: {action.to(torch.device('cpu')).detach().numpy()[0]}") if is_debug else None
+                    #print actions
+                    if is_debug:
+                        print(f"[STEP]: {step} [ACTION TYPE]: {action_type} [REWARD]: {reward}")  
+                        print(f"[MOVE]: {action.to(torch.device('cpu')).detach().numpy()[0]}") 
 
-                    #get state
+                    #get next state
                     next_state = self.preprocess_state(depth_img     = next_depth_img, 
                                                        gripper_state = next_gripper_state, 
                                                        yaw_ang       = next_yaw_state)
 
-                    done = False if self.env.N_pickable_obj > 0 else True
+                    #check if all items are picked
+                    done = False if self.env.N_pickable_item > 0 else True
                     
                     # store experience in one action
-                    s_time = time.time()
-                    depth_states[i]      = depth_img
-                    gripper_states[i]    = gripper_state
-                    yaw_states[i]        = yaw_state
-                    actions[i]           = action.to(torch.device('cpu')).detach().numpy()[0]
-                    gripper_actions[i]   = gripper_action.to(torch.device('cpu')).detach().numpy()[0]
-                    action_types[i]      = action_type
-                    rewards[i]           = reward
-                    next_depth_states[i] = next_depth_img
-                    dones[i]             = True if (i == len(delta_moves) - 1 or done) else False
+
+                    depth_states.append(depth_img)
+                    gripper_states.append(gripper_state)
+                    yaw_states.append(yaw_state)
+                    actions.append(action.to(torch.device('cpu')).detach().numpy()[0])
+                    gripper_actions.append(gripper_action.to(torch.device('cpu')).detach().numpy()[0])
+                    next_actions.append(next_action.to(torch.device('cpu')).detach().numpy()[0])
+                    next_gripper_actions.append(next_gripper_action.to(torch.device('cpu')).detach().numpy()[0])
+                    action_types.append(action_type)
+                    rewards.append(reward)
+                    next_depth_states.append(next_depth_img)
+                    next_gripper_states.append(next_gripper_state)
+                    next_yaw_states.append(next_yaw_state)
+                    dones.append(True if (i == len(delta_moves) - 1 or done) else False)
 
                     #update history
                     ep_r += reward
@@ -703,7 +947,6 @@ class Agent():
 
                     #check if done
                     if done:
-                        self.env.reset(reset_obj = True)
                         print("[SUCCESS] finish one episode")
                         self.r_hist.append(ep_r)
                         self.step_hist.append(step)         
@@ -711,55 +954,131 @@ class Agent():
                     else:
 
                         #return home position if grasp successfully
-                        if is_success_grasp:
-                            print("[SUCCESS] grasp an object")
-                            self.env.return_home()
+                        if is_success_grasp or i == len(delta_moves) - 1:
+                            print("[SUCCESS] finish actions or grasp an item")
+                            self.env.return_home(action_type)
                             print("[SUCCESS] return home position")
 
                         #check if out of working space
                         elif self.env.is_out_of_working_space:
                             print("[WARN] out of working space")
-                            self.env.reset(reset_obj = False)
+                            self.env.reset(reset_item = False)
 
                         #check if action executable
                         elif not self.env.can_execute_action:
                             print("[WARN] action is not executable")
-                            self.env.reset(reset_obj = False)
+                            self.env.reset(reset_item = False)
 
                         #check if collision to ground
                         elif self.env.is_collision_to_ground:
                             print("[WARN] collision to ground")
-                            self.env.reset(reset_obj = False)
+                            self.env.reset(reset_item = False)
 
-                #update estimated Q values
-                if np.sum(rewards) > 0: #only save successful experience
-                    labeled_qs[-1] = rewards[-1]
-                    print(f'labeled_qs {len(labeled_qs) - 1}: {labeled_qs[-1]}')
-                    for i in range(len(labeled_qs) - 2, -1, -1):
-                        labeled_qs[i] = rewards[i] + self.gamma*labeled_qs[i+1]
-                        print(f'labeled_qs {i}: {labeled_qs[i]}')
+                    #this set of motions is not executable => break it
+                    if (self.env.is_out_of_working_space or 
+                        not self.env.can_execute_action or
+                        self.env.is_collision_to_ground):
+                        print("[WARN] stop executing this action!")
+                        break
 
-                    #store transition experience          
-                    for i in range(len(delta_moves)): 
-                        self.buffer_replay.store_transition(True if i == 0 else False, #store if at home pos
-                                                            depth_states[i], 
-                                                            gripper_states[i],
-                                                            yaw_states[i],
-                                                            actions[i], 
-                                                            gripper_actions[i], 
-                                                            action_types[i],
-                                                            rewards[i], 
-                                                            next_depth_states[i], 
-                                                            dones[i], 
-                                                            labeled_qs[i], 
-                                                            labeled_qs[i]) 
-                    print("[SUCCESS] store successful demonstration")
-                else:
-                    print("[SUCCESS] discard fail demonstration")
+                #update previous action type
+                previous_action_type = action_type
 
-            if self.buffer_replay.is_full:
-                self.buffer_replay.save_buffer()
-                break
+                 #store transition experience of low-level behaviour  
+
+                depth_states         = np.array(depth_states)
+                gripper_states       = np.array(gripper_states)
+                yaw_states           = np.array(yaw_states)
+                actions              = np.array(actions)
+                gripper_actions      = np.array(gripper_actions)
+                next_actions         = np.array(next_actions)
+                next_gripper_actions = np.array(next_gripper_actions)
+                action_types         = np.array(action_types)
+                rewards              = np.array(rewards)
+                next_depth_states    = np.array(next_depth_states)
+                dones                = np.array(dones)
+
+                for i in range(len(depth_states)): 
+                    self.buffer_replay.store_transition(True if i == 0 else False, #store if at home pos
+                                                        depth_states[i], 
+                                                        gripper_states[i],
+                                                        yaw_states[i],
+                                                        actions[i], 
+                                                        gripper_actions[i], 
+                                                        next_actions[i],
+                                                        next_gripper_actions[i],
+                                                        action_types[i],
+                                                        rewards[i], 
+                                                        next_depth_states[i], 
+                                                        next_gripper_states[i],
+                                                        next_yaw_states[i],
+                                                        dones[i], 
+                                                        0., 
+                                                        0.,
+                                                        True if rewards.sum() > 0 else False) 
+                    
+                print('[SUCCESS] store transition experience for low-level action')
+                #TODO [NOTE 24 Aug 2024]: temporary design of hld reward
+                #TODO [NOTE 24 Aug 2024]: add hld_reward function in env class
+                #TODO [FINISH 25 Aug 2024]: handle sudden stop execution
+
+                #compute the hld reward after completing one set of action
+                hld_reward = 0.
+                if action_type == constants.GRASP:
+                    if np.sum(rewards) > 0:
+                        hld_reward += 1.0
+                elif action_type == constants.PUSH:                                
+                    if np.sum(rewards) > 0:
+                        hld_reward += 0.5
+
+                #store hld-net data after completing one set of action
+                hld_depth_states.append(depth_states[0])
+                hld_action_types.append(action_type)
+                hld_rewards.append(hld_reward)
+                hld_next_depth_states.append(next_depth_states[-1])
+                hld_dones.append(False if self.env.N_pickable_item > 0 else True)
+                print('[SUCCESS] store hld-net data')
+
+                #reset any items out of working space
+                #TODO [NOTE 24 AUG 2024]: reset any items after one complete set of actions
+                self.env.reset_item2workingspace()    
+                time.sleep(0.5) 
+                print('[SUCCESS] reset items to workplaces if any')
+                
+            #update hld-net q values
+            hld_depth_states      = np.array(hld_depth_states)
+            hld_action_types      = np.array(hld_action_types)
+            hld_rewards           = np.array(hld_rewards)
+            hld_next_depth_states = np.array(hld_next_depth_states)
+            hld_dones             = np.array(hld_dones)
+
+            print('[SUCCESS] compute backward estimation hld-net q values')
+
+            #store transition experience of high-level behaviour
+            for i in range(len(hld_rewards)):
+                self.buffer_replay_hld.store_transition(hld_depth_states[i],
+                                                        hld_action_types[i],
+                                                        hld_rewards[i],
+                                                        hld_next_depth_states[i],
+                                                        hld_dones[i],
+                                                        0.,
+                                                        0.,
+                                                        0.,
+                                                        0.)
+            
+            print('[SUCCESS] store transition experience for high-level decision')
+
+            #save buffer for each episode
+            self.buffer_replay.save_buffer()
+            print(f"[SUCCESS] save buffer {self.buffer_replay.memory_cntr+1}/{self.buffer_replay.max_memory_size}")
+            self.buffer_replay_hld.save_buffer()
+            print(f"[SUCCESS] save hld buffer {self.buffer_replay_hld.memory_size}/{self.buffer_replay_hld.memory_size}")
+            
+            #update episode
+            episode += 1
+
+        print("[SUCCESS] buffer is full")
+        
             
     def save_models(self):
         #save grasp network
@@ -918,7 +1237,7 @@ class Agent():
 
     #             #check if terminate this episode
     #             #TODO: test the function
-    #             done = False if self.env.N_pickable_obj > 0 else True
+    #             done = False if self.env.N_pickable_item > 0 else True
 
             # #compute predict q value and labeled q value
             # with torch.no_grad(): 
@@ -975,7 +1294,7 @@ class Agent():
                 
     #             #check if done
     #             if done:
-    #                 self.env.reset(reset_obj = True)
+    #                 self.env.reset(reset_item = True)
     #                 print("[SUCCESS] finish one episode")
     #                 self.r_hist.append(ep_r)
     #                 self.step_hist.append(step)         
@@ -984,22 +1303,22 @@ class Agent():
 
     #                 #return home position if grasp successfully
     #                 if is_success_grasp:
-    #                     print("[SUCCESS] grasp an object")
+    #                     print("[SUCCESS] grasp an item")
     #                     self.env.return_home()
 
     #                 #check if out of working space
     #                 elif self.env.is_out_of_working_space:
     #                     print("[WARN] out of working space")
-    #                     self.env.reset(reset_obj = False)
+    #                     self.env.reset(reset_item = False)
 
     #                 #check if action executable
     #                 elif not self.env.can_execute_action:
     #                     print("[WARN] action is not executable")
-    #                     self.env.reset(reset_obj = False)
+    #                     self.env.reset(reset_item = False)
 
     #                 #check if collision to ground
     #                 elif self.env.is_collision_to_ground:
     #                     print("[WARN] collision to ground")
-    #                     self.env.reset(reset_obj = False)
+    #                     self.env.reset(reset_item = False)
 
 
