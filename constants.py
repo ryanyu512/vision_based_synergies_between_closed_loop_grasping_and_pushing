@@ -15,10 +15,11 @@ COLOR_SPACE = np.asarray([[78.0, 121.0, 167.0],   # blue
                           [255, 157, 167]])/255.0 # pink
 
 #initialise gripper status
-GRIPPER_FULL_CLOSE = 0
-GRIPPER_FULL_OPEN  = 1
+GRIPPER_FULL_CLOSE         = 0
+GRIPPER_FULL_OPEN          = 1
 GRIPPER_NON_CLOSE_NON_OPEN = 2
-
+GRIPPER_CANNOT_OPERATE     = 3
+ 
 #initialise gripper action
 OPEN_GRIPPER  = 0
 CLOSE_GRIPPER = 1
@@ -27,6 +28,13 @@ CLOSE_GRIPPER = 1
 GRASP = 0
 PUSH  = 1
 
+#define the min. distance needs to be pushed
+MIN_DIST_PUSH = 0.03
+
+#initialise number of step for grasping/pushing
+N_STEP_GRASP = 7
+N_STEP_PUSH  = 7
+
 #initialise home pose 
 HOME_POSE = [-0.1112, 
              0.48541, 
@@ -34,4 +42,5 @@ HOME_POSE = [-0.1112,
              0, 0, 0]
 
 #max actions for the networks
-MAX_ACTION = [0.05, 0.05, 0.05, np.deg2rad(30.)]
+MAX_ACTION      = [0.07, 0.07, 0.07, np.deg2rad(30.)]
+PUSH_MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(45.)]

@@ -14,8 +14,8 @@ class HDL_Net(nn.Module):
 
     def __init__(self,                                                         
                  N_input_channels = 1,                      #encoder input channel
-                 input_dims       = [2048],                 #FLC input dimension
-                 FCL_dims         = [1024, 512, 256],       #FLC network dimension
+                 input_dims       = [512],                  #FLC input dimension
+                 FCL_dims         = [256, 128],             #FLC network dimension
                  N_output         = 2,                      #output dimension
                  lr               = 1e-4,                   #learning rate
                  epsilon          = 0.1,                    #epsilon for action explorations
@@ -34,32 +34,32 @@ class HDL_Net(nn.Module):
         #[(W-K+2P)/S] + 1
         self.encoder = nn.Sequential(
             #W: 128 => 64
-            nn.Conv2d(N_input_channels, 32, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(N_input_channels, 8, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(8),
             nn.ReLU(),
             #W: 64 => 32 
+            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            #W: 32 => 16
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            #W: 16 => 8
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            #W: 32 => 16
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            #W: 8 => 4
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            #W: 16 => 8
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            #W: 4 => 2
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(256),
             nn.ReLU(),
-            #W: 8 => 4
+            #W: 2 => 1
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-            #W: 4 => 2
-            nn.Conv2d(512, 1024, kernel_size=3, stride=2, padding=1), 
-            nn.BatchNorm2d(1024),
-            nn.ReLU(),
-            #W: 2 => 1
-            nn.Conv2d(1024, 2048, kernel_size=3, stride=2, padding=1), 
-            nn.BatchNorm2d(2048),
             nn.ReLU(),
             nn.Flatten(),
         )
@@ -69,13 +69,10 @@ class HDL_Net(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(FCL_dims[0], FCL_dims[1]),
                                 nn.BatchNorm1d(FCL_dims[1]),
-                                nn.ReLU(),
-                                nn.Linear(FCL_dims[1], FCL_dims[2]),
-                                nn.BatchNorm1d(FCL_dims[2]),
                                 nn.ReLU())
 
         #initialise outputs
-        self.actions_q_values = nn.Linear(FCL_dims[2], self.N_output)
+        self.actions_q_values = nn.Linear(FCL_dims[1], self.N_output)
 
         #initialise checkpoint directory
         self.checkpt_dir  = checkpt_dir
@@ -103,12 +100,14 @@ class HDL_Net(nn.Module):
 
         x = self.encoder(state)
         
+        x = self.fc(x)
+
         q_values = self.actions_q_values(x)
 
         return q_values
     
     def make_decisions(self, state):
-
+        
         if random.random() <= self.epsilon:
             return random.randrange(self.N_output)
         else:
@@ -223,8 +222,8 @@ class Actor(nn.Module):
     def __init__(self,                                                         
                  max_action = [0.05, 0.05, 0.05, np.deg2rad(30.)], #action range 
                  N_input_channels = 2,                    #encoder input channel
-                 input_dims       = [2048],                #FLC input dimension
-                 FCL_dims         = [1024, 512, 256],       #FLC network dimension
+                 input_dims       = [1024],               #FLC input dimension
+                 FCL_dims         = [512, 256],           #FLC network dimension
                  N_action         = 4,                    #action dimension
                  N_gripper_action = 2,                    #action type dimension
                  lr               = 1e-4,                 #learning rate
@@ -245,45 +244,35 @@ class Actor(nn.Module):
         #[(W-K+2P)/S] + 1
         self.encoder = nn.Sequential(
             #W: 128 => 64
-            nn.Conv2d(N_input_channels, 32, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(N_input_channels, 16, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(16),
             nn.ReLU(),
             #W: 64 => 32 
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            #W: 32 => 16
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            #W: 32 => 16
+            #W: 16 => 8
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            #W: 16 => 8
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            #W: 8 => 4
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(256),
             nn.ReLU(),
-            #W: 8 => 4
+            #W: 4 => 2
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(512),
             nn.ReLU(),
-            #W: 4 => 2
+            #W: 2 => 1
             nn.Conv2d(512, 1024, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(1024),
             nn.ReLU(),
-            #W: 2 => 1
-            nn.Conv2d(1024, 2048, kernel_size=3, stride=2, padding=1), 
-            nn.BatchNorm2d(2048),
-            nn.ReLU(),
             nn.Flatten(),
         )
-
-        #initialise fully connected layers
-        # self.fc = nn.Sequential(
-        #     nn.Linear(input_dims[0], FCL_dims[0]),
-        #     # nn.BatchNorm1d(FCL_dims[0]),
-        #     nn.ReLU(),
-        #     nn.Linear(FCL_dims[0], FCL_dims[1]),
-        #     # nn.BatchNorm1d(FCL_dims[1]),
-        #     nn.ReLU()
-        # )
 
         #initialise outputs
         self.mean                = nn.Sequential(nn.Linear(input_dims[0], FCL_dims[0]),
@@ -292,32 +281,23 @@ class Actor(nn.Module):
                                                  nn.Linear(FCL_dims[0], FCL_dims[1]),
                                                  nn.BatchNorm1d(FCL_dims[1]),
                                                  nn.ReLU(), 
-                                                 nn.Linear(FCL_dims[1], FCL_dims[2]),
-                                                 nn.BatchNorm1d(FCL_dims[2]),
-                                                 nn.ReLU(), 
-                                                 nn.Linear(FCL_dims[2], N_action))
+                                                 nn.Linear(FCL_dims[1], N_action))
         
         self.std                 = nn.Sequential(nn.Linear(input_dims[0], FCL_dims[0]),
                                                  nn.BatchNorm1d(FCL_dims[0]),
                                                  nn.ReLU(),
                                                  nn.Linear(FCL_dims[0], FCL_dims[1]),
                                                  nn.BatchNorm1d(FCL_dims[1]),
-                                                 nn.ReLU(), 
-                                                 nn.Linear(FCL_dims[1], FCL_dims[2]),
-                                                 nn.BatchNorm1d(FCL_dims[2]),
-                                                 nn.ReLU(), 
-                                                 nn.Linear(FCL_dims[2], N_action))
+                                                 nn.ReLU(),
+                                                 nn.Linear(FCL_dims[1], N_action))
         if action_type == "grasp":
             self.gripper_actions =  nn.Sequential(nn.Linear(input_dims[0], FCL_dims[0]),
                                                   nn.BatchNorm1d(FCL_dims[0]),
-                                                 nn.ReLU(),
-                                                 nn.Linear(FCL_dims[0], FCL_dims[1]),
-                                                 nn.BatchNorm1d(FCL_dims[1]),
-                                                 nn.ReLU(), 
-                                                 nn.Linear(FCL_dims[1], FCL_dims[2]),
-                                                 nn.BatchNorm1d(FCL_dims[2]),
-                                                 nn.ReLU(), 
-                                                 nn.Linear(FCL_dims[2], N_gripper_action))
+                                                  nn.ReLU(),
+                                                  nn.Linear(FCL_dims[0], FCL_dims[1]),
+                                                  nn.BatchNorm1d(FCL_dims[1]),
+                                                  nn.ReLU(), 
+                                                  nn.Linear(FCL_dims[1], N_gripper_action))
         else:
             self.gripper_actions = None
 
@@ -333,7 +313,8 @@ class Actor(nn.Module):
         self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_sac'))
 
         #initialise optimiser
-        self.optimiser = optim.Adam(self.parameters(), lr = lr)
+        self.optimiser    = optim.Adam(self.parameters(), lr = lr)
+        self.bc_optimiser = optim.Adam(self.parameters(), lr = lr)
 
         #used for preventing 0 value
         self.sm_c = 1e-6                 
@@ -345,9 +326,8 @@ class Actor(nn.Module):
         #move to correct device
         state = state.to(self.device)
 
+        #encode state
         x = self.encoder(state)
-
-        # x = self.fc(x)
 
         #compute normal distribution mean
         mean = self.mean(x)
@@ -367,13 +347,12 @@ class Actor(nn.Module):
             gripper_action_probs = None
 
         return mean, std, gripper_action_probs
-        # return mean, gripper_action_probs
 
     def get_actions(self, 
                     state, 
                     is_reparametrerise = True):
-        #TODO [FINISH 22 AUG 2024]: add torch.softmax to gripper_action_probs
-        mean, std, gripper_action_probs = self.forward(state)
+
+        mean, std, gripper_action_prob = self.forward(state)
 
         normal = Normal(mean, std)
 
@@ -382,19 +361,21 @@ class Actor(nn.Module):
         else:
             z = normal.sample()
 
-        actions     = torch.tanh(z)*self.max_action
-        # actions     = torch.tanh(mean)*self.max_action
-        if gripper_action_probs is not None:
-            gripper_action = Categorical(torch.softmax(gripper_action_probs, axis = 1)).sample()
-        else:
-            gripper_action = constants.CLOSE_GRIPPER
+        normalised_action = torch.tanh(z)
+        action = normalised_action*self.max_action
 
-        return actions, gripper_action, z, normal, gripper_action_probs
+        if gripper_action_prob is not None:
+            gripper_action = Categorical(torch.softmax(gripper_action_prob, axis = 1)).sample()
+        else:
+            gripper_action = torch.FloatTensor([constants.CLOSE_GRIPPER]).unsqueeze(0)
+
+        return action, normalised_action, gripper_action, z, normal, gripper_action_prob
 
     def compute_log_prob(self, normal, a, z):
 
+
         log_probs  = normal.log_prob(z) - torch.log(1-a.pow(2) + self.sm_c)
-        log_probs  = log_probs.sum(-1, keepdim = True)
+        log_probs  = log_probs.sum(-1, keepdim = True)/a.shape[-1]
 
         return log_probs.float()
 
