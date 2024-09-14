@@ -29,18 +29,31 @@ GRASP = 0
 PUSH  = 1
 
 #define the min. distance needs to be pushed
-MIN_DIST_PUSH = 0.03
+MIN_DIST_PUSH = 0.035
 
 #initialise number of step for grasping/pushing
 N_STEP_GRASP = 7
 N_STEP_PUSH  = 7
 
 #initialise home pose 
-HOME_POSE = [-0.1112, 
-             0.48541, 
-             0.26883, 
-             0, 0, 0]
+HOME_POSE = [-0.11120, 
+              0.48541, 
+              0.26883, 
+              0, 0, 0]
 
+#initialise working space center
+WORK_SPACE_CENTER = [-0.110, 0.560, 0.001]
+WORK_SPACE_DIM    = [0.30, 0.25, 0.]
 #max actions for the networks
 MAX_ACTION      = [0.07, 0.07, 0.07, np.deg2rad(30.)]
 PUSH_MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(45.)]
+
+#define the maximum possible distance
+MAX_POSSIBLE_DIST = 0.
+for i in range(2):
+    DELTA = (WORK_SPACE_CENTER[i] + WORK_SPACE_DIM[i] - HOME_POSE[i])**2
+    MAX_POSSIBLE_DIST += DELTA
+
+MAX_POSSIBLE_DIST = MAX_POSSIBLE_DIST**0.5
+
+print(f"[MAX_POSSIBLE_DIST]: {MAX_POSSIBLE_DIST}")

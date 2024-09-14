@@ -189,6 +189,7 @@ class Critic(nn.Module):
         self.checkpt_dir  = checkpt_dir
 
         #check if dir exists 
+        self.name = name
         if not os.path.exists(self.checkpt_dir):
             os.makedirs(self.checkpt_dir)
         self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_sac'))
@@ -211,11 +212,20 @@ class Critic(nn.Module):
         
         return x
 
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpt_file)
+    def save_checkpoint(self, is_best = False):
 
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpt_file))
+        if is_best:
+            torch.save(self.state_dict(), self.checkpt_file)
+        else:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_sac_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
+
+    def load_checkpoint(self, is_best = False):
+        if is_best:
+            self.load_state_dict(torch.load(self.checkpt_file))
+        else:
+            file = os.path.abspath(os.path.join(self.checkpt_dir, self.name + '_sac_checkpt'))
+            self.load_state_dict(torch.load(file))
 
 class Actor(nn.Module):
     
@@ -308,6 +318,7 @@ class Actor(nn.Module):
         self.checkpt_dir  = checkpt_dir
 
         #check if dir exists 
+        self.name = name
         if not os.path.exists(self.checkpt_dir):
             os.makedirs(self.checkpt_dir)
         self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_sac'))
@@ -379,8 +390,17 @@ class Actor(nn.Module):
 
         return log_probs.float()
 
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpt_file)
+    def save_checkpoint(self, is_best = False):
 
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpt_file))
+        if is_best:
+            torch.save(self.state_dict(), self.checkpt_file)
+        else:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_sac_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
+
+    def load_checkpoint(self, is_best = False):
+        if is_best:
+            self.load_state_dict(torch.load(self.checkpt_file))
+        else:
+            file = os.path.abspath(os.path.join(self.checkpt_dir, self.name + '_sac_checkpt'))
+            self.load_state_dict(torch.load(file))

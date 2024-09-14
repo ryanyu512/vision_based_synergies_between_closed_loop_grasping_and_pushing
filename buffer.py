@@ -1,6 +1,7 @@
 import os
 import copy
 import pickle 
+import random
 import constants
 import numpy as np
 
@@ -13,11 +14,15 @@ class BufferReplay():
                  N_gripper_action_type  = 2,
                  alpha                  = 0.6,
                  checkpt_dir            = 'logs/exp',
+                 load_checkpt_dir       = None,
                  priority_lambda        = 0.7, 
+                 prioritised_prob       = 0.8,
                  is_debug               = True): 
       
         self.have_grasp_data        = False
         self.have_push_data         = False
+        self.grasp_data_size        = 0
+        self.push_data_size         = 0
         self.max_memory_size        = max_memory_size
         self.memory_cntr            = 0
         self.img_size               = img_size
@@ -66,6 +71,8 @@ class BufferReplay():
         self.priority             = np.ones(self.max_memory_size)
         #scale factor for balancing between actor loss and critic loss
         self.priority_lambda      = priority_lambda
+        #initialise prioritised sampling probability
+        self.prioritised_prob     = prioritised_prob
 
         #initialise check point directory
         if not os.path.exists(checkpt_dir):
@@ -78,8 +85,11 @@ class BufferReplay():
         self.is_debug    = is_debug
 
         try:
-            self.load_exp_from_dir()
-            print("[SUCCESS] load low-level buffer")
+            if load_checkpt_dir is None:
+                self.load_exp_from_dir()
+            else:
+                self.load_exp_from_dir(load_checkpt_dir)
+                print("[SUCCESS] load low-level buffer")
         except:
             print("[FAIL] cannot load low-level buffer")
 
@@ -139,16 +149,28 @@ class BufferReplay():
             self.is_full = True
             self.memory_cntr = 0
 
+        #minus action type data size when the buffer is full before storing new experience
+        if self.is_full:
+            if self.action_types[self.memory_cntr] == constants.GRASP:
+                self.grasp_data_size -= 1
+            else:
+                self.push_data_size -= 1
+
         # priority = np.abs(predict_q - labeled_q + self.sm_c)**self.alpha
         if actor_loss is not None:
             priority = np.abs(self.priority_lambda*actor_loss+(1-self.priority_lambda)*critic_loss + self.sm_c)**self.alpha
         else:
             priority = np.abs(critic_loss + self.sm_c)**self.alpha   
 
+        #plus action type data size
         if action_type == constants.GRASP:
             self.have_grasp_data = True
+            self.grasp_data_size += 1                
         else:
             self.have_push_data  = True
+            self.push_data_size += 1
+
+        print(f"[BUFFER] grasp_data_size: {self.grasp_data_size} push_data_size: {self.push_data_size}")
 
         self.depth_states[self.memory_cntr]           = depth_state
         self.gripper_states[self.memory_cntr]         = gripper_state
@@ -238,9 +260,11 @@ class BufferReplay():
 
         experience = self.get_experience_by_action_type(action_type)
 
-        priorities = copy.copy(experience[1])
-        if priorities.sum() == 0:
-            priorities = np.ones_like(priorities)
+        if experience[1].sum() == 0:
+            priorities = np.ones_like(experience[1])
+        else:
+            priorities = copy.copy(experience[1])
+
         probs = priorities/(priorities.sum())
 
         batch   = np.random.choice(len(experience[0]), 
@@ -313,10 +337,14 @@ class BufferReplay():
             if self.data_length >= self.max_memory_size:
                 self.data_length  = 0
  
-    def load_exp_from_dir(self):
+    def load_exp_from_dir(self, checkpt_dir = None):
 
-        #get all the file names in the checkpoint directory
-        exp_dir = os.listdir(self.checkpt_dir)
+        if checkpt_dir is None:
+            #get all the file names in the checkpoint directory
+            checkpt_dir = self.checkpt_dir
+            # exp_dir = os.listdir(self.checkpt_dir)
+        # else:
+        exp_dir = os.listdir(checkpt_dir)
 
         #check the data size in hardware storage
         data_length = len(exp_dir)
@@ -333,7 +361,7 @@ class BufferReplay():
             self.memory_cntr     = data_length
 
         for i in range(data_length):
-            file_name = os.path.join(self.checkpt_dir, exp_dir[i])
+            file_name = os.path.join(checkpt_dir, exp_dir[i])
             with open(file_name, 'rb') as file:
                 data_dict = pickle.load(file)
 
@@ -354,12 +382,17 @@ class BufferReplay():
                 self.labeled_qs[i]             = data_dict['labeled_q'] 
                 self.success_mask[i]           = data_dict['success_mask'] 
                 #reset to 0.5 to encouage the agent update old exp's priority
-                self.priority[i]               = 0.5  
+                self.priority[i]               = data_dict['priority']  
 
                 if self.action_types[i] == constants.GRASP:
                     self.have_grasp_data = True
+                    self.grasp_data_size += 1
                 else:
                     self.have_push_data = True
+                    self.push_data_size += 1
+
+        print(f"[BUFFER] grasp_data_size: {self.grasp_data_size}")
+        print(f"[BUFFER] push_data_size: {self.push_data_size}")
 
     def update_buffer(self, sample_inds, actor_loss, critic_loss):
 
