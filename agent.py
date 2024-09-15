@@ -144,19 +144,21 @@ class Agent():
                  env,
                  N_action = 4,
                  N_gripper_action = 2,
+                 N_grasp_step_demo = constants.N_STEP_GRASP_DEMO,
+                 N_push_step_demo  = constants.N_STEP_PUSH_DEMO,
                  N_push_step  = constants.N_STEP_PUSH,
                  N_grasp_step = constants.N_STEP_GRASP,
                  N_batch_hld  = 32,                     #batch for high-level decision network
                  N_batch      = 64,                     #batch for low-level action network
                  hld_lr       = 1e-5,                   #learning rate for high-level decision network
                  lr           = 1e-4,                   #learning rate for low-level action network
-                 alpha        = 0.01,                   #for SAC entropy maxisation
+                 alpha        = 0.05,                   #for SAC entropy maxisation
                  tau          = 0.05,                   #for soft update of gripper and push net 
                  tau_hld      = 0.001,                  #for soft update of hld-net 
                  gamma        = 0.95,                   #discount rate for td-learning
-                 bc_lambda    = 1.00,                   #factor for balancing rl loss and bc loss
+                 bc_lambda    = 10.00,                  #factor for balancing rl loss and bc loss
                  bc_lambda_decay       = 0.999,         #factor to decay bc_lambda
-                 min_bc_lambda         = 0.1,           #define min bc_lambda
+                 min_bc_lambda         = 1.0,           #define min bc_lambda
                  max_memory_size       = 50000,
                  max_step              = 250,
                  save_all_exp_interval = 20,            #mainly used for update all experience's priority
@@ -172,8 +174,8 @@ class Agent():
 
         #initialise env
         self.env = env
-        self.env.N_grasp_step = N_grasp_step
-        self.env.N_push_step  = N_push_step
+        self.env.N_grasp_step = N_grasp_step_demo
+        self.env.N_push_step  = N_push_step_demo
         print("[SUCCESS] initialise environment")
 
         #initialise action and action_type dimension
@@ -1418,12 +1420,11 @@ class Agent():
                 delta_moves, target_item_pos, action_type = self.env.demo_guidance_generation()
 
                 #decide if it should enter demo mode
-                if is_train and \
-                    (self.buffer_replay_expert.grasp_data_size < self.N_batch * 4 or \
-                     self.buffer_replay_expert.push_data_size  < self.N_batch * 4):
-                    expert_mode = True
-                    buffer_replay = self.buffer_replay_expert
-                elif is_train and action_type == constants.PUSH and push_fail_counter >= 1:
+                self.enable_bc = True
+                self.enable_rl_critic = True
+                self.enable_rl_actor  = True
+
+                if is_train and action_type == constants.PUSH and push_fail_counter >= 1:
                     expert_mode = True
                     buffer_replay = self.buffer_replay_expert
                     push_fail_counter = 0
@@ -1435,27 +1436,50 @@ class Agent():
                     expert_mode = False
                     buffer_replay = self.buffer_replay
 
-                #decide if it should start bc
-                if (self.buffer_replay_expert.grasp_data_size >= self.N_batch and
-                    self.buffer_replay_expert.push_data_size  >= self.N_batch):
-                    self.enable_bc = True                
-                    #decide if actor should start rl
-                    if (self.buffer_replay.grasp_data_size >= self.N_batch and 
-                        self.buffer_replay.push_data_size  >= self.N_batch):
-                        self.enable_rl_critic = True
+                # if is_train and \
+                #     (self.buffer_replay_expert.grasp_data_size < self.N_batch * 5 or \
+                #      self.buffer_replay_expert.push_data_size  < self.N_batch * 5):
+                #     expert_mode = True
+                #     buffer_replay = self.buffer_replay_expert
+                # elif is_train and action_type == constants.PUSH and push_fail_counter >= 1:
+                #     expert_mode = True
+                #     buffer_replay = self.buffer_replay_expert
+                #     push_fail_counter = 0
+                # elif is_train and action_type == constants.GRASP and grasp_fail_counter >= 1:
+                #     expert_mode = True
+                #     buffer_replay = self.buffer_replay_expert
+                #     grasp_fail_counter = 0
+                # else:
+                #     expert_mode = False
+                #     buffer_replay = self.buffer_replay
 
-                    if (self.buffer_replay.grasp_data_size >= 10*self.N_batch and 
-                        self.buffer_replay.push_data_size  >= 10*self.N_batch):
-                        self.enable_rl_actor = True
+                # #decide if it should start bc
+                # if (self.buffer_replay_expert.grasp_data_size >= self.N_batch and
+                #     self.buffer_replay_expert.push_data_size  >= self.N_batch):
+                #     self.enable_bc = True                
+                #     #decide if actor should start rl
+                #     if (self.buffer_replay.grasp_data_size >= self.N_batch and 
+                #         self.buffer_replay.push_data_size  >= self.N_batch):
+                #         self.enable_rl_critic = True
+
+                #     if (self.buffer_replay.grasp_data_size >= 10*self.N_batch and 
+                #         self.buffer_replay.push_data_size  >= 10*self.N_batch):
+                #         self.enable_rl_actor = True
 
                 if self.env.N_pickable_item <= 0:
                     episode_done = True
                     continue
 
                 if action_type == constants.GRASP:
-                    N_step_low_level = self.N_grasp_step
+                    if expert_mode:
+                        N_step_low_level = len(delta_moves)
+                    else:
+                        N_step_low_level = self.N_grasp_step
                 else:
-                    N_step_low_level = self.N_push_step
+                    if expert_mode:
+                        N_step_low_level = len(delta_moves)
+                    else:    
+                        N_step_low_level = self.N_push_step
                 
                 print(f"N_step_low_level: {N_step_low_level}")
 
@@ -1522,26 +1546,26 @@ class Agent():
                         print("[SUCCESS] estimate actions from network") 
 
                     #action from demo
-                    move = np.array(delta_moves[i])
-                    action_demo, gripper_action_demo = np.array(move[0:self.N_action]), np.argmax(np.array(move[-2:]))
-                    gripper_action_demo    = torch.FloatTensor([gripper_action_demo]).unsqueeze(0).to(self.device)
-                    action_demo            = torch.FloatTensor(action_demo).unsqueeze(0).to(self.device)
-
-                    if self.is_debug:
-                        print("[SUCCESS] estimate actions from guidance") 
-
-                    if action_type == constants.GRASP:
-                        normalised_action_demo = action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
-                    else:
-                        normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
-
                     if expert_mode:
+                        move = np.array(delta_moves[i])
+                        action_demo, gripper_action_demo = np.array(move[0:self.N_action]), np.argmax(np.array(move[-2:]))
+                        gripper_action_demo    = torch.FloatTensor([gripper_action_demo]).unsqueeze(0).to(self.device)
+                        action_demo            = torch.FloatTensor(action_demo).unsqueeze(0).to(self.device)
+
+                        if self.is_debug:
+                            print("[SUCCESS] estimate actions from guidance") 
+
+                        if action_type == constants.GRASP:
+                            normalised_action_demo = action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
+                        else:
+                            normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
+
                         action, normalised_action, gripper_action = action_demo, normalised_action_demo, gripper_action_demo
+
+                        if self.is_debug:
+                            print("[SUCCESS] normalise guidance action") 
                     else:
                         action, normalised_action, gripper_action =  action_est, normalised_action_est, gripper_action_est
-
-                    if self.is_debug:
-                        print("[SUCCESS] normalise guidance action") 
 
                     #compute action state and current q value
                     if action_type == constants.GRASP:
@@ -1596,6 +1620,7 @@ class Agent():
                     #check if all items are picked
                     episode_done = False if self.env.N_pickable_item > 0 else True
                     if (i == N_step_low_level - 1 or 
+                        is_success_grasp or
                         self.env.is_out_of_working_space or 
                         not self.env.can_execute_action or 
                         self.env.is_collision_to_ground or
@@ -1638,27 +1663,28 @@ class Agent():
                     if self.is_debug:
                         print("[SUCCESS] estimate next actions from network")
 
-                    #action from demo
-                    n_move = np.array(delta_moves[i+1] if i+1 < len(delta_moves) else [0,0,0,0,move[-2],move[-1]])
-                    next_action_demo, next_gripper_action_demo = np.array(n_move[0:self.N_action]), np.argmax(np.array(n_move[-2:]))
-                    next_gripper_action_demo = torch.FloatTensor([next_gripper_action_demo]).unsqueeze(0).to(self.device)
-                    next_action_demo = torch.FloatTensor(next_action_demo).unsqueeze(0).to(self.device)
-
-                    if self.is_debug:
-                        print("[SUCCESS] estimate next actions from guidance")
-
-                    if action_type == constants.GRASP:
-                        next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
-                    else:
-                        next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
-
                     if expert_mode:
-                        next_action, next_normalised_action, next_gripper_action = next_action_demo, next_normalised_action_demo, next_gripper_action_demo
+
+                        #action from demo
+                        n_move = np.array(delta_moves[i+1] if i+1 < len(delta_moves) else [0,0,0,0,move[-2],move[-1]])
+                        next_action_demo, next_gripper_action_demo = np.array(n_move[0:self.N_action]), np.argmax(np.array(n_move[-2:]))
+                        next_gripper_action_demo = torch.FloatTensor([next_gripper_action_demo]).unsqueeze(0).to(self.device)
+                        next_action_demo = torch.FloatTensor(next_action_demo).unsqueeze(0).to(self.device)
+
+                        if self.is_debug:
+                            print("[SUCCESS] estimate next actions from guidance")
+
+                        if action_type == constants.GRASP:
+                            next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
+                        else:
+                            next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
+
+                        next_action, next_normalised_action, next_gripper_action = next_action_demo, next_normalised_action_demo, next_gripper_action_demo    
+
+                        if self.is_debug:
+                            print("[SUCCESS] normalise next actions from guidance")                        
                     else:
                         next_action, next_normalised_action, next_gripper_action = next_action_est, next_normalised_action_est, next_gripper_action_est
-
-                    if self.is_debug:
-                        print("[SUCCESS] normalise next actions from guidance")
 
                     #compute next action state and next q value
                     if action_type == constants.GRASP:
@@ -1744,50 +1770,38 @@ class Agent():
                         self.r_hist.append(ep_r)
                         self.step_hist.append(step)         
                         break 
-                    else:
+                    elif action_done:
 
-                        #return home position if grasp successfully
-                        if is_success_grasp or i == N_step_low_level - 1:
-                            print("[SUCCESS] finish actions or grasp an item")
-
+                        
+                        if  is_success_grasp or i == N_step_low_level - 1:
+                            if is_success_grasp:
+                                print("[SUCCESS] grasp an item")
+                            else:
+                                print("[SUCCESS] finish an action")
+                                
                         #check if out of working space
-                        elif self.env.is_out_of_working_space:
+                        if self.env.is_out_of_working_space:
                             print("[WARN] out of working space")
-                            self.env.reset(reset_item = False)
-                            is_env_reset = True
-
                         #check if action executable
                         elif not self.env.can_execute_action:
                             print("[WARN] action is not executable")
-                            self.env.reset(reset_item = False)
-                            is_env_reset = True
-
                         #check if collision to ground
                         elif self.env.is_collision_to_ground:
-                            print("[WARN] collision to ground")
-                            self.env.reset(reset_item = False)
-                            is_env_reset = True
-                        
+                            print("[WARN] collision to ground")                        
                         #check if the gripper can operate normally
                         elif self.env.gripper_cannot_operate:
-                            print("[WARN] gripper cannot function properly")
+                            print("[WARN] gripper cannot function properly")                        
+
+                        #this set of motions is not executable => break it
+                        if (self.env.is_out_of_working_space or 
+                            not self.env.can_execute_action or 
+                            self.env.is_collision_to_ground or 
+                            self.env.gripper_cannot_operate):
+
                             self.env.reset(reset_item = False)
                             is_env_reset = True
+                            print("[WARN] stop executing this action!")
                         
-                        #check if the target item is out of sight
-                        elif (is_train and not self.env.is_within_sight):
-                            print("[WARN] target item out of sight")
-                            self.env.reset(reset_item = False)
-                            is_env_reset = True
-
-                    #this set of motions is not executable => break it
-                    if (self.env.is_out_of_working_space or 
-                        not self.env.can_execute_action or 
-                        self.env.is_collision_to_ground or 
-                        self.env.gripper_cannot_operate or 
-                        (is_train and not self.env.is_within_sight)):
-
-                        print("[WARN] stop executing this action!")
                         break
                 
                 print("=== end of action ===")
@@ -2118,7 +2132,7 @@ class Agent():
             actor_loss_bc, actor_loss_bc_no_reduce = self.compute_actor_loss_bc(action_type, expert_state_batch, expert_action_batch, expert_gripper_action_batch)
 
         if self.enable_rl_actor and self.enable_bc:
-            actor_loss = (actor_loss_rl*(1 - self.bc_lambda) + self.bc_lambda*actor_loss_bc)
+            actor_loss = (actor_loss_rl + self.bc_lambda*actor_loss_bc)
             self.bc_lambda = np.max([self.min_bc_lambda, self.bc_lambda*self.bc_lambda_decay])
         elif self.enable_bc:
             actor_loss = actor_loss_bc

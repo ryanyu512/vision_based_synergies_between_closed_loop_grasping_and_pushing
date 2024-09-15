@@ -32,7 +32,9 @@ PUSH  = 1
 MIN_DIST_PUSH = 0.035
 
 #initialise number of step for grasping/pushing
-N_STEP_GRASP = 7
+N_STEP_GRASP_DEMO = 7
+N_STEP_PUSH_DEMO  = 7
+N_STEP_GRASP = 10
 N_STEP_PUSH  = 7
 
 #initialise home pose 

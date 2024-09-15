@@ -381,7 +381,6 @@ class BufferReplay():
                 self.predict_qs[i]             = data_dict['predict_q']         
                 self.labeled_qs[i]             = data_dict['labeled_q'] 
                 self.success_mask[i]           = data_dict['success_mask'] 
-                #reset to 0.5 to encouage the agent update old exp's priority
                 self.priority[i]               = data_dict['priority']  
 
                 if self.action_types[i] == constants.GRASP:
