@@ -300,16 +300,19 @@ class Actor(nn.Module):
                                                  nn.BatchNorm1d(FCL_dims[1]),
                                                  nn.ReLU(),
                                                  nn.Linear(FCL_dims[1], N_action))
-        if action_type == "grasp":
-            self.gripper_actions =  nn.Sequential(nn.Linear(input_dims[0], FCL_dims[0]),
-                                                  nn.BatchNorm1d(FCL_dims[0]),
-                                                  nn.ReLU(),
-                                                  nn.Linear(FCL_dims[0], FCL_dims[1]),
-                                                  nn.BatchNorm1d(FCL_dims[1]),
-                                                  nn.ReLU(), 
-                                                  nn.Linear(FCL_dims[1], N_gripper_action))
-        else:
-            self.gripper_actions = None
+        
+        # if action_type == "grasp":
+        #     self.gripper_actions =  nn.Sequential(nn.Linear(input_dims[0], FCL_dims[0]),
+        #                                           nn.BatchNorm1d(FCL_dims[0]),
+        #                                           nn.ReLU(),
+        #                                           nn.Linear(FCL_dims[0], FCL_dims[1]),
+        #                                           nn.BatchNorm1d(FCL_dims[1]),
+        #                                           nn.ReLU(), 
+        #                                           nn.Linear(FCL_dims[1], N_gripper_action))
+        # else:
+        #     self.gripper_actions = None
+
+        self.gripper_actions = None
 
         #initialise max action range
         self.max_action = torch.tensor(max_action).to(self.device)
@@ -351,19 +354,23 @@ class Actor(nn.Module):
                           min = self.sm_c, 
                           max = 1.)
         
-        #compute gripper action type
-        if self.gripper_actions is not None:
-            gripper_action_probs = self.gripper_actions(x)
-        else:
-            gripper_action_probs = None
+        # #compute gripper action type
+        # if self.gripper_actions is not None:
+        #     gripper_action_probs = self.gripper_actions(x)
+        # else:
+        #     gripper_action_probs = None
 
-        return mean, std, gripper_action_probs
+        # return mean, std, gripper_action_probs
+
+        return mean, std
 
     def get_actions(self, 
                     state, 
                     is_reparametrerise = True):
 
-        mean, std, gripper_action_prob = self.forward(state)
+        # mean, std, gripper_action_prob = self.forward(state)
+
+        mean, std = self.forward(state)
 
         normal = Normal(mean, std)
 
@@ -375,12 +382,14 @@ class Actor(nn.Module):
         normalised_action = torch.tanh(z)
         action = normalised_action*self.max_action
 
-        if gripper_action_prob is not None:
-            gripper_action = Categorical(torch.softmax(gripper_action_prob, axis = 1)).sample()
-        else:
-            gripper_action = torch.FloatTensor([constants.CLOSE_GRIPPER]).unsqueeze(0)
+        # if gripper_action_prob is not None:
+        #     gripper_action = Categorical(torch.softmax(gripper_action_prob, axis = 1)).sample()
+        # else:
+        #     gripper_action = torch.FloatTensor([constants.CLOSE_GRIPPER]).unsqueeze(0)
 
-        return action, normalised_action, gripper_action, z, normal, gripper_action_prob
+        # return action, normalised_action, gripper_action, z, normal, gripper_action_prob
+
+        return action, normalised_action, z, normal
 
     def compute_log_prob(self, normal, a, z):
 

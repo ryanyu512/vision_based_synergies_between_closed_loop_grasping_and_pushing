@@ -15,7 +15,8 @@ class BufferReplay():
                  alpha                  = 0.6,
                  checkpt_dir            = 'logs/exp',
                  load_checkpt_dir       = None,
-                 priority_lambda        = 0.7, 
+                 actor_lambda           = 5., 
+                 critic_lambda          = 1.,
                  prioritised_prob       = 0.8,
                  is_debug               = True): 
       
@@ -70,7 +71,8 @@ class BufferReplay():
         #surprise value
         self.priority             = np.ones(self.max_memory_size)
         #scale factor for balancing between actor loss and critic loss
-        self.priority_lambda      = priority_lambda
+        self.actor_lambda         = actor_lambda
+        self.critic_lambda        = critic_lambda
         #initialise prioritised sampling probability
         self.prioritised_prob     = prioritised_prob
 
@@ -158,7 +160,7 @@ class BufferReplay():
 
         # priority = np.abs(predict_q - labeled_q + self.sm_c)**self.alpha
         if actor_loss is not None:
-            priority = np.abs(self.priority_lambda*actor_loss+(1-self.priority_lambda)*critic_loss + self.sm_c)**self.alpha
+            priority = np.abs(self.actor_lambda*actor_loss + self.critic_lambda*np.abs(critic_loss) + self.sm_c)**self.alpha
         else:
             priority = np.abs(critic_loss + self.sm_c)**self.alpha   
 
@@ -260,11 +262,10 @@ class BufferReplay():
 
         experience = self.get_experience_by_action_type(action_type)
 
-        if experience[1].sum() == 0:
+        if experience[1].sum() == 0 or random.random() >= self.prioritised_prob:
             priorities = np.ones_like(experience[1])
         else:
             priorities = copy.copy(experience[1])
-
         probs = priorities/(priorities.sum())
 
         batch   = np.random.choice(len(experience[0]), 
@@ -407,7 +408,7 @@ class BufferReplay():
 
         for i, sample_ind in enumerate(sample_inds):
             if actor_loss is not None:
-                self.priority[sample_ind]  = np.abs(self.priority_lambda*actor_loss[i]+(1-self.priority_lambda)*critic_loss[i] + self.sm_c)**self.alpha
+                self.priority[sample_ind]  = np.abs(self.actor_lambda*actor_loss[i]+self.critic_lambda*critic_loss[i] + self.sm_c)**self.alpha
             else:
                 self.priority[sample_ind]  = np.abs(critic_loss[i] + self.sm_c)**self.alpha
 
