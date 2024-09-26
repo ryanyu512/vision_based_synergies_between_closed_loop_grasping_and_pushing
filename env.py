@@ -20,7 +20,7 @@ class Env():
                  N_step_grasp             =  constants.N_STEP_GRASP_DEMO, 
                  N_step_push              =  constants.N_STEP_PUSH_DEMO,
                  can_execute_action_thres =  0.010,
-                 push_reward_thres        =  0.015,
+                 push_reward_thres        =  0.010,
                  ground_collision_thres   =  0.00,
                  lift_z_after_grasp       =  0.05,
                  return_home_pos_thres    =  0.025,
@@ -74,11 +74,15 @@ class Env():
         self.N_pickable_item = self.N_item = N_item
 
         #create 5-point at gripper tip for collision checking
-        self.gripper_tip_box = np.array([[-0.0175,       0, -0.025], 
-                                         [ 0.0175,       0, -0.025],
-                                         [      0,  0.0125, -0.025],
-                                         [      0, -0.0125, -0.025],
-                                         [      0,       0, -0.025]]).T
+        self.gripper_tip_box = np.array([[ -0.0175,        0,  -0.025], 
+                                         [-0.00875,        0,  -0.025],
+                                         [  0.0175,        0,  -0.025],
+                                         [ 0.00875,        0,  -0.025],
+                                         [       0,   0.0125,  -0.025],
+                                         [       0,  0.00625,  -0.025],
+                                         [       0,  -0.0125,  -0.025],
+                                         [       0, -0.00625,  -0.025],
+                                         [       0,        0,  -0.025]]).T
         
         #initialise N step for pushing and grasping
         self.N_step_grasp = N_step_grasp
@@ -283,12 +287,14 @@ class Env():
                     #want to leave some margin such that items on the edge of working area can still be picked up
                     is_within_x, is_within_y = self.is_within_working_space(obj_pos, margin = 0.0)
 
-                    if not(is_within_x and is_within_y) and (not self.item_data_dict['picked'][i]):
+                    #TODO [NOTE ON 16/09/2024]: obj_pos[2] >= 0.03 is only suitable for restricted grasping and pushing action
+                    #obj_pos[2] >= 0.03 => this condition avoids items stack on each other or upright position
+                    if (not(is_within_x and is_within_y) or obj_pos[2] >= 0.035) and (not self.item_data_dict['picked'][i]) :
                         #randomise item pose
                         obj_pos, obj_ori = self.randomise_obj_pose(xc=self.x_center,
-                                                                yc=self.y_center,
-                                                                xL=self.x_length,
-                                                                yL=self.y_length)
+                                                                   yc=self.y_center,
+                                                                   xL=self.x_length,
+                                                                   yL=self.y_length)
 
                         #set item pose
                         self.set_obj_pose(obj_pos, obj_ori, obj_handle, self.sim.handle_world)
@@ -599,12 +605,12 @@ class Env():
         self.sim.setObjectPosition(handle, pos,ref_frame)
         self.sim.setObjectOrientation(handle, ori, ref_frame)
     
-    def grasp_reward(self, distance_aft_move):
+    def grasp_reward(self):
 
         #check if the item is grasped firmly
         is_success_grasp = False
 
-        reward = -distance_aft_move/constants.MAX_POSSIBLE_DIST*0.
+        reward = 0.
 
         print(f"[GRASP DISTANCE] {reward}")
 
@@ -654,18 +660,17 @@ class Env():
 
         return reward, is_success_grasp
 
-    def push_reward(self, gripper_pos, distance_aft_move):
+    def push_reward(self, gripper_pos):
 
         #[NOTE 25 Aug 2024]: push reward should encourage the robot push items that are cluttered together
 
-        reward = -distance_aft_move/constants.MAX_POSSIBLE_DIST*0.
-
-        print(f"[PUSH DISTANCE] {reward}")
+        reward = 0.
 
         #update current item position after action
         self.item_data_dict['c_pose'] = self.update_item_pose()
 
-        is_push_success = False
+        push_clustered_item     = False
+        push_non_clustered_item = False
         for i, obj_handle in enumerate(self.item_data_dict['handle']):
 
             d_gripper2item =  np.linalg.norm(np.array(self.item_data_dict['c_pose'][i][0:3]) - np.array(gripper_pos))
@@ -678,17 +683,22 @@ class Env():
             delta_distance = np.linalg.norm(np.array(self.item_data_dict['c_pose'][i][0:3]) - np.array(self.item_data_dict['p_pose'][i][0:3]))
 
             #ensure the item has been pushed significantly and the item is close to another item
-            if delta_distance > self.push_reward_thres and self.item_data_dict['min_d'][i] <= constants.MIN_DIST_PUSH:
+            if delta_distance > self.push_reward_thres:
                 if self.is_debug:
                     print(f'delta_distance {i}: {delta_distance}')
-                is_push_success = True
+                if self.item_data_dict['min_d'][i] <= constants.MIN_DIST_PUSH:
+                    push_clustered_item = True
+                else:
+                    push_non_clustered_item = True
 
-        if is_push_success:
+        if push_clustered_item:
             reward += 1.
+        elif push_non_clustered_item:
+            reward += 0.1
         
         print(f"[PUSH REWARD] R: {reward}")
 
-        return reward
+        return reward, push_clustered_item
 
     def check_is_action_executable(self, gripper_tip_pos, gripper_tip_ori, UR5_cur_goal_pos):
 
@@ -766,19 +776,20 @@ class Env():
             print(f"IS_OUT_OF_SIGHT")
             self.is_within_sight = False
 
-    def reward(self, action_type, gripper_tip_pos, gripper_tip_ori, distance_aft_move, target_item_pos):
+    def reward(self, action_type, gripper_tip_pos, gripper_tip_ori):
 
         #compute how close between gripper tip and the nearest item
         is_success_grasp = False
+        is_success_push  = False
 
         #get UR5 goal 
         UR5_cur_goal_pos, _ = self.get_obj_pose(self.UR5_goal_handle, self.sim.handle_world)    
 
         #compute reward
         if action_type == constants.GRASP:
-            reward, is_success_grasp = self.grasp_reward(distance_aft_move)
+            reward, is_success_grasp = self.grasp_reward()
         elif action_type == constants.PUSH:
-            reward = self.push_reward(gripper_tip_pos, distance_aft_move)
+            reward, is_success_push  = self.push_reward(gripper_tip_pos)
 
         #check if the action is executable
         self.check_is_action_executable(gripper_tip_pos, gripper_tip_ori, UR5_cur_goal_pos)
@@ -794,9 +805,24 @@ class Env():
 
         print(f"[OVERALL REWARD] {reward}")
 
-        return reward, is_success_grasp
+        return reward, is_success_grasp, is_success_push
 
-    def step(self, action_type, delta_pos, delta_ori, is_open_gripper, target_item_pos):
+    def get_raw_data(self, action_type):
+
+        _, depth_img         = self.get_rgbd_data()
+        _, gripper_tip_ori   = self.get_obj_pose(self.gripper_tip_handle, 
+                                                 self.sim.handle_world)
+        if action_type == constants.PUSH:
+            yaw_ang        = gripper_tip_ori[2]
+            gripper_status = None
+        else:
+            yaw_ang        = gripper_tip_ori[2]
+            # gripper_status = self.env.gripper_status
+            gripper_status = None
+
+        return depth_img, gripper_status, yaw_ang
+
+    def step(self, action_type, delta_pos, delta_ori, is_open_gripper):
 
         is_success_grasp = False
 
@@ -813,16 +839,29 @@ class Env():
             # target = self.gripper_joint_close
             # self.open_close_gripper(is_open_gripper, target)
 
+        #get gripper_tip_pos        
+        gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
+
         if action_type == constants.GRASP:
             target = self.gripper_joint_open
             is_open_gripper = True
             self.open_close_gripper(is_open_gripper, target)
+        elif action_type == constants.PUSH:
+            if gripper_tip_pos[2] >= 0.1:
+                is_open_gripper = True
+                target = self.gripper_joint_open
+            else:
+                is_open_gripper = False
+                target = self.gripper_joint_close
+            self.open_close_gripper(is_open_gripper, target)
+
 
         self.move(delta_pos = delta_pos, delta_ori = delta_ori)
 
         #get gripper_tip_pos        
         gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
 
+        is_push = False
         if action_type ==constants.GRASP:
             #TODO [NOTE ON 15/09/2024]: change it to tunable parameters later if workable
             if gripper_tip_pos[2] <= 0.05: 
@@ -834,16 +873,35 @@ class Env():
 
             self.open_close_gripper(is_open_gripper, target)
         elif action_type == constants.PUSH:
-            target = self.gripper_joint_close
-            is_open_gripper = False
 
+            if gripper_tip_pos[2] >= 0.1:
+                is_open_gripper = True
+                target = self.gripper_joint_open
+            else:
+                is_open_gripper = False
+                target = self.gripper_joint_close
             self.open_close_gripper(is_open_gripper, target)
 
-        #get the distance before move
-        distance_aft_move = np.linalg.norm(np.array(target_item_pos) - np.array(gripper_tip_pos))
+            print(f"gripper tip height: {gripper_tip_pos[2]}")
+
+            if gripper_tip_pos[2] <= 0.05:
+                yaw = gripper_tip_ori[2]
+                
+                delta_push = [np.cos(yaw + np.pi/2.)*constants.PUSH_MAX_ACTION[0], 
+                              np.sin(yaw + np.pi/2.)*constants.PUSH_MAX_ACTION[1], 
+                              0.]
+                
+                self.move(delta_pos = delta_push, delta_ori = [0., 0., 0.])
+                is_push = True
+
+        #get gripper_tip_pos        
+        gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
+
+        #get next raw data
+        next_depth_img, next_gripper_state, next_yaw_state = self.get_raw_data(action_type)
 
         #compute reward
-        reward, is_success_grasp = self.reward(action_type, gripper_tip_pos, gripper_tip_ori, distance_aft_move, target_item_pos)
+        reward, is_success_grasp, is_success_push = self.reward(action_type, gripper_tip_pos, gripper_tip_ori)
 
         #update item poses
         self.item_data_dict['c_pose'] = self.update_item_pose()
@@ -853,15 +911,12 @@ class Env():
         bbox_items, size_items, center_items, face_centers_items, Ro2w_items = self.compute_item_bboxes()
 
         for i in range(self.N_item):
-            neighbour_pos, neighbour_ind, target_corner, neighbour_corner, min_distance = self.get_closest_item_neighbour(i, 
-                                                                                                                          bbox_items,
-                                                                                                                          face_centers_items)
+            _, _, _, _, min_distance = self.get_closest_item_neighbour(i, 
+                                                                       bbox_items,
+                                                                       face_centers_items)
             self.item_data_dict['min_d'][i] = min_distance
 
-        #get gripper_tip_pos        
-        gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
-
-        return reward, True if is_success_grasp else False
+        return reward, is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_tip_pos[2]
     
     def return_home(self, is_env_reset, action_type = None):
 
@@ -1100,7 +1155,7 @@ class Env():
                           neighbour_ind, 
                           target_pt, 
                           neighbour_pt, 
-                          offset_z = 0.025):
+                          offset_z = 0.):
 
         #get all item poses
         item_poses = copy.copy(self.item_data_dict['c_pose'])
@@ -1206,7 +1261,7 @@ class Env():
                 is_collision_at_start_pt = False
 
                 for j in range(len(center_items)):
-                    is_collision_at_start_pt = self.is_within_bbox(gripper_tip_box, center_items[j], size_items[j], Ro2w_items[j])
+                    is_collision_at_start_pt = self.is_within_bbox(gripper_tip_box, center_items[j], size_items[j], Ro2w_items[j], margin = 0.005)
                     if is_collision_at_start_pt:
                         break
 
@@ -1299,9 +1354,9 @@ class Env():
             p  = np.matmul(Rw2o, p.T)
             if (0 <= abs(p[0]) <= size[0]/2. + margin and 
                 0 <= abs(p[1]) <= size[1]/2. + margin and
-                0 <= abs(p[2]) <= size[2]/2.):
+                0 <= abs(p[2]) <= size[2]/2. + margin):
                 return True
-        
+
         return False
 
     def compute_guidance_grasp_ang(self, item_ind, bbox_items):
@@ -1405,11 +1460,17 @@ class Env():
                                  offset_z_push = 0.050):
 
         #initialise move delta
-        delta_move = []
+        delta_move_grasp = []
+        delta_move_push  = []
+
+        is_get_push_target  = False
+        is_get_grasp_target = False
+        target_item_pos_grasp = None
+        target_item_pos_push  = None
 
         #step1: check if all items are picked
         if self.N_pickable_item == 0:
-            return delta_move
+            return delta_move_grasp, delta_move_push, target_item_pos_grasp, target_item_pos_push
         
         #update all item pose
         self.item_data_dict['c_pose'] = self.update_item_pose()
@@ -1446,10 +1507,12 @@ class Env():
 
             print(f"[MIN_DISTANCE] {min_distance}")
             #check if the target item is graspable
-            if min_distance > min_distance_threshold:
+            if not is_get_grasp_target and min_distance > min_distance_threshold:
+
+                is_get_grasp_target = True
 
                 item_ind        = sorted_item_ind[i]
-                target_item_pos = sorted_items_pos[i]
+                target_item_pos_grasp = sorted_items_pos[i]
 
                 #compute linear movement N_step
                 #offset the delta to ensure the gripper tip is not in collision with the ground/target item
@@ -1471,11 +1534,11 @@ class Env():
                 step_mag_ori = step_mag_ori[1:] - step_mag_ori[0:-1]
 
                 for j in range(len(step_mag_lin)):
-                    delta_move.append([lin_unit_vector[0]*step_mag_lin[j], 
-                                       lin_unit_vector[1]*step_mag_lin[j],
-                                       lin_unit_vector[2]*step_mag_lin[j],
-                                       step_mag_ori[j],
-                                       1, 0]) #open gripper
+                    delta_move_grasp.append([lin_unit_vector[0]*step_mag_lin[j], 
+                                             lin_unit_vector[1]*step_mag_lin[j],
+                                             lin_unit_vector[2]*step_mag_lin[j],
+                                             step_mag_ori[j],
+                                             1, 0]) #open gripper
 
                 if step_mag_lin[0] > constants.MAX_ACTION[0]:
                     print("[ERROR] step_mag_lin[0] > constants.MAX_ACTION[0]")
@@ -1486,15 +1549,17 @@ class Env():
 
                 #step4: [GRASP] open gripper and move vertically down by a constant height => close gripper
                 # delta_move.append([0, 0, -offset_z*0.9, 0, 0, 1]) #close gripper
-                delta_move.append([0, 0, -offset_z*0.7, 0., 0, 1]) #close gripper
+                delta_move_grasp.append([0, 0, -offset_z*0.7, 0., 0, 1]) #close gripper
 
-                return delta_move, target_item_pos, constants.GRASP
+                # return delta_move, target_item_pos, constants.GRASP
 
-            else:
+            if not is_get_push_target and min_distance <= min_distance_threshold:
+
+                is_get_push_target = True
 
                 #compute the closest point between two items and push start point
                 target_ind      = sorted_item_ind[i]
-                target_item_pos = sorted_items_pos[i]
+                target_item_pos_push = sorted_items_pos[i]
 
                 push_point, be4_push_point = self.compute_push_path(center_items,
                                                                     size_items, 
@@ -1524,7 +1589,7 @@ class Env():
                 delta_yaw = target_yaw_ang - gripper_tip_ori[2]
 
                 #unify N_step
-                N_step = self.N_step_push - 1
+                N_step = self.N_step_push
 
                 #compute step magnitude of each step
                 step_mag_lin_home2start    = np.linspace(0, push_home2start_norm, N_step, endpoint = True)
@@ -1535,21 +1600,22 @@ class Env():
 
                 #move to the point on top of the push start point
                 for j in range(len(step_mag_lin_home2start)):
-                    delta_move.append([push_home2start_unit_vec[0]*step_mag_lin_home2start[j], 
-                                       push_home2start_unit_vec[1]*step_mag_lin_home2start[j],
-                                       push_home2start_unit_vec[2]*step_mag_lin_home2start[j],
-                                       step_mag_ori_home2start[j],
-                                       0, 1])
+                    delta_move_push.append([push_home2start_unit_vec[0]*step_mag_lin_home2start[j], 
+                                            push_home2start_unit_vec[1]*step_mag_lin_home2start[j],
+                                            push_home2start_unit_vec[2]*step_mag_lin_home2start[j],
+                                            step_mag_ori_home2start[j],
+                                            0, 1])
                 
                 #move downward to reach the push start point
-                delta_move.append([0,0,-offset_z_push*0.7, 0, 0, 1]) #+1
+                delta_move_push.append([0,0,-offset_z_push*0.5, 0, 0, 1]) #+1
+                # delta_move_push.append([0,0,-offset_z_push*1.05, 0, 0, 1]) #+1
 
-                #push item
-                delta_move.append([push_start2closest_unit_vec[0]*push_max_move, 
-                                   push_start2closest_unit_vec[1]*push_max_move,
-                                   push_start2closest_unit_vec[2]*push_max_move,
-                                   0,
-                                   0, 1]) #close gripper #+1
+                # #push item
+                # delta_move.append([push_start2closest_unit_vec[0]*push_max_move, 
+                #                    push_start2closest_unit_vec[1]*push_max_move,
+                #                    push_start2closest_unit_vec[2]*push_max_move,
+                #                    0,
+                #                    0, 1]) #close gripper #+1
                 
                 if step_mag_lin_home2start[0] > constants.PUSH_MAX_ACTION[0]:
                     print("[ERROR] step_mag_lin_home2start[0] > constants.PUSH_MAX_ACTION[0]")
@@ -1558,4 +1624,6 @@ class Env():
 
                 print(f"[PUSH GUIDANCE] home2start- linear: {step_mag_lin_home2start[0]}, angular: {np.rad2deg(step_mag_ori_home2start[0])}")
 
-                return delta_move, target_item_pos, constants.PUSH
+                # return delta_move, target_item_pos, constants.PUSH
+
+        return delta_move_grasp, delta_move_push, target_item_pos_grasp, target_item_pos_push

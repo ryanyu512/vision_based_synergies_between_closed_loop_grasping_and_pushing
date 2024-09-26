@@ -46,12 +46,14 @@ class Agent():
                  tau_hld      = 0.001,                  #for soft update of hld-net 
                  gamma        = 0.95,                   #discount rate for td-learning
                  bc_lambda    = 10.00,                  #factor for balancing rl loss and bc loss
-                 rl_lambda    = 0.001,                  #factor to avoid rl loss dominates in the initial phase
+                 rl_lambda    = 0.,                     #factor to avoid rl loss dominates in the initial phase
                  bc_lambda_decay       = 0.9999,        #factor to decay bc_lambda
                  rl_lambda_upscale     = 1.001,         #factor to upscale rl_lambda
-                 min_bc_lambda         = 5.0,           #define min bc_lambda
-                 max_rl_lambda         = 1.0,           #define max rl_lambda
-                 max_memory_size       = 50000,
+                 min_bc_lambda         = 10.00,         #define min bc_lambda
+                 max_rl_lambda         = 0.,            #define max rl_lambda
+                 max_memory_size       = 25000,
+                 max_memory_size_rl    = 25000,
+                 max_memory_size_hld   = 25000,
                  max_step              = 250,
                  save_all_exp_interval = 20,            #mainly used for update all experience's priority
                  max_result_window     = 100,           #the maximum record length that record if this action is successful or fail
@@ -79,28 +81,6 @@ class Agent():
         #initialise high level network
         self.hld_net        = HDL_Net(name = "hld_net", N_input_channels = 1, lr = lr)
         self.hld_net_target = HDL_Net(name = "hld_net_target", N_input_channels = 1, lr = lr)
-
-        # #initialise grasp actor
-        # self.grasp_actor   = Actor(name = "grasp_actor" if not bc_offline else "grasp_actor_bc_offline", 
-        #                            max_action = constants.MAX_ACTION,
-        #                            N_input_channels = 3, 
-        #                            lr = lr) #depth image + gripper status + yaw state
-        # #initialise grasp critic network 1
-        # self.grasp_critic1 = Critic(name = "grasp_critic1" if not bc_offline else "grasp_critic1_bc_offline", 
-        #                             N_input_channels = 8, 
-        #                             lr = lr) #depth image + gripper status + yaw state + dx + dy + dz + dyaw + gripper action
-        # #initialise grasp ciritc network 2
-        # self.grasp_critic2 = Critic(name = "grasp_critic2" if not bc_offline else "grasp_critic2_bc_offline", 
-        #                             N_input_channels = 8, 
-        #                             lr = lr) #depth image + gripper status + yaw state + dx + dy + dz + dyaw + gripper action
-        # #initialise grasp critic network target 1
-        # self.grasp_critic1_target = Critic(name = "grasp_critic1_target" if not bc_offline else "grasp_critic1_target_bc_offline", 
-        #                                    N_input_channels = 8, 
-        #                                    lr = lr) #depth image + gripper status + yaw state + dx + dy + dz + dyaw + gripper action
-        # #initialise grasp critic network target 2
-        # self.grasp_critic2_target = Critic(name = "grasp_critic2_target" if not bc_offline else "grasp_critic2_target_bc_offline", 
-        #                                    N_input_channels = 8, 
-        #                                    lr = lr) #depth image + gripper status + yaw state + dx + dy + dz + dyaw + gripper action
 
         #initialise grasp actor
         self.grasp_actor   = Actor(name = "grasp_actor" if not bc_offline else "grasp_actor_bc_offline", 
@@ -152,15 +132,11 @@ class Agent():
         print("[SUCCESS] initialise networks")
 
         #initialise buffer replay
-        self.bc_offline = bc_offline
-        if not bc_offline:
-            self.buffer_replay        = BufferReplay(max_memory_size = max_memory_size, 
-                                                     checkpt_dir = 'logs/exp_rl')
-            self.buffer_replay_expert = BufferReplay(max_memory_size = max_memory_size, 
-                                                     checkpt_dir = 'logs/exp_expert')
-        else:
-            self.buffer_replay_expert_offline = BufferReplay(max_memory_size = max_memory_size, checkpt_dir = 'logs/exp_expert_offline')
-        self.buffer_replay_hld    = BufferReplay_HLD(max_memory_size = int(max_memory_size/5))
+        self.buffer_replay        = BufferReplay(max_memory_size = max_memory_size_rl, 
+                                                 checkpt_dir = 'logs/exp_rl')
+        self.buffer_replay_expert = BufferReplay(max_memory_size = max_memory_size, 
+                                                    checkpt_dir = 'logs/exp_expert')
+        self.buffer_replay_hld    = BufferReplay_HLD(max_memory_size = int(max_memory_size_hld))
         print("[SUCCESS] initialise memory buffer")
         #initialise batch size
         self.N_batch     = N_batch
@@ -215,30 +191,24 @@ class Agent():
         #the maximum record length that record if this action is successful or fail
         self.max_result_window = max_result_window
 
-        self.grasp_record_list = [0]*self.max_result_window
-        self.push_record_list  = [0]*self.max_result_window
+        self.grasp_reward_list = [0]*self.max_result_window
+        self.push_reward_list  = [0]*self.max_result_window
+        self.hld_record_list   = [0]*self.max_result_window
+        self.hld_step_list     = [0]*self.max_result_window
         self.grasp_record_index = 0
         self.push_record_index  = 0
+        self.hld_record_index   = 0
 
-        self.best_grasp_success_rate = -np.inf
-        self.best_push_success_rate  = -np.inf
-        self.grasp_success_rate_hist = []
-        self.push_success_rate_hist  = []
+        self.best_grasp_reward_sum = -np.inf
+        self.best_push_reward_sum  = -np.inf
+        self.best_hld_success_rate = -np.inf
+        self.best_hld_step_mean    =  np.inf
+        self.grasp_reward_sum_hist = []
+        self.push_reward_sum_hist  = []
+        self.hld_success_rate_hist = []
+        self.hld_step_mean_hist    = []
 
-    def get_raw_data(self, action_type):
 
-        _, depth_img         = self.env.get_rgbd_data()
-        _, gripper_tip_ori   = self.env.get_obj_pose(self.env.gripper_tip_handle, 
-                                                     self.env.sim.handle_world)
-        if action_type == constants.PUSH:
-            yaw_ang        = gripper_tip_ori[2]
-            gripper_status = None
-        else:
-            yaw_ang        = gripper_tip_ori[2]
-            # gripper_status = self.env.gripper_status
-            gripper_status = None
-
-        return depth_img, gripper_status, yaw_ang
 
     def preprocess_state(self, depth_img, gripper_state, yaw_ang, is_grasp = True):
         
@@ -301,17 +271,37 @@ class Agent():
                 target_layer.running_mean.copy_(tau * source_layer.running_mean + (1 - tau) * target_layer.running_mean)
                 target_layer.running_var.copy_(tau * source_layer.running_var + (1 - tau) * target_layer.running_var)
 
+    def init_hld_exp(self):
+        #initialise memory space for storing a complete set of actions
+        self.hld_depth_states      = []
+        self.hld_action_types      = [] 
+        self.hld_rewards           = []
+        self.hld_next_depth_states = []
+        self.hld_dones             = []
+        self.hld_critic_loss       = []
+
+    def append_hld_exp(self, depth_state, action_type, reward, next_depth_state, done, critic_loss):
+
+        self.hld_depth_states.append(depth_state)
+        self.hld_action_types.append(action_type)
+        self.hld_rewards.append(reward)
+        self.hld_next_depth_states.append(next_depth_state)
+        self.hld_dones.append(done)
+        self.hld_critic_loss.append(critic_loss)
+
+    def append_lla_exp(self):
+        pass
+
     def interact_test(self,
                       max_episode = 1,
-                      is_train    = True):
+                      is_full_train = False,
+                      is_LL_train = True):
 
-        self.is_train = is_train
+        self.is_LL_train = is_LL_train
+        self.is_full_train = is_full_train
 
         #start trainiing/evaluation loop
         episode = 0
-
-        #load check point
-        # self.hld_net.load_checkpoint()
 
         try:
             #load agent data
@@ -325,11 +315,11 @@ class Agent():
         while episode < max_episode:
 
             #initialise episode data
-            step = 0
-            ep_r = 0.
+            hld_step = 0
+            step     = 0
+            ep_r     = 0.
             episode_done         = False
             action_type          = None
-            previous_action_type = None
             is_success_grasp     = False
             grasp_fail_counter   = 0
             push_fail_counter    = 0
@@ -338,32 +328,12 @@ class Agent():
             self.env.reset(reset_item = True)
             is_env_reset = True
 
+            #init hld experience
+            self.init_hld_exp()
+
             while not episode_done and step < self.max_step:
 
                 print(f"==== episode: {episode} ====")
-
-
-                # #get raw data
-                # depth_img, _, _ = self.get_raw_data(action_type)
-
-                # #get state (no use in demo gathering)
-                # depth_img, _, _ = self.preprocess_state(depth_img     = depth_img, 
-                #                                         gripper_state = None, 
-                #                                         yaw_ang       = None)
-                
-                # hld_state = torch.FloatTensor(depth_img).unsqueeze(0).unsqueeze(0)
-
-                # self.hld_net.eval()
-                # with torch.no_grad():
-                #     action_type = self.hld_net.make_decisions(hld_state)
-
-                self.env.return_home(is_env_reset, previous_action_type)
-                is_env_reset = False
-
-                if self.is_debug:
-                    print("[SUCCESS] return home")
-
-                time.sleep(0.5) 
 
                 #reset any items out of working space
                 self.env.reset_item2workingspace()    
@@ -373,72 +343,99 @@ class Agent():
 
                 time.sleep(0.5) 
 
+                if self.is_full_train:
+                    #get raw data
+                    _, hld_depth_img = self.env.get_rgbd_data()
+
+                    #get state (no use in demo gathering)
+                    in_hld_depth_img, _, _ = self.preprocess_state(depth_img     = hld_depth_img, 
+                                                                   gripper_state = None, 
+                                                                   yaw_ang       = None)
+                    
+                    hld_state = torch.FloatTensor(in_hld_depth_img).unsqueeze(0).unsqueeze(0)
+
+                    self.hld_net.eval()
+                    with torch.no_grad():
+                        hld_q_values, action_type = self.hld_net.make_decisions(hld_state)
+
+                    #turn off expert mode
+                    expert_mode = False
+
                 #demo action generation
-                delta_moves, target_item_pos, action_type = self.env.demo_guidance_generation()
+                delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
+
+                if self.is_full_train:
+                    if action_type == constants.GRASP:
+                        delta_moves = delta_moves_grasp
+                    elif action_type == constants.PUSH:
+                        delta_moves = delta_moves_push
+                elif self.is_LL_train:
+                    if len(delta_moves_grasp) > 0:
+                        delta_moves = delta_moves_grasp
+                        if not self.is_full_train:
+                            action_type = constants.GRASP
+                    else:
+                        delta_moves = delta_moves_push
+                        if not self.is_full_train:
+                            action_type = constants.PUSH
 
                 #decide if it should enter demo mode
-                self.enable_bc = True
-                self.enable_rl_critic = True
-                self.enable_rl_actor  = True
+                if self.is_LL_train and \
+                    (self.buffer_replay_expert.grasp_data_size < self.N_batch * 5 or \
+                     self.buffer_replay_expert.push_data_size  < self.N_batch * 5):
+                    expert_mode    = True
+                    self.enable_bc = True 
+                    buffer_replay  = self.buffer_replay_expert                       
+                elif (self.is_LL_train or self.is_full_train) and action_type == constants.PUSH and push_fail_counter >= 1:
+                    if self.is_full_train: 
+                        if len(delta_moves) > 0:
+                            expert_mode = True
+                            buffer_replay = self.buffer_replay_expert
+                        else:
+                            expert_mode = False
+                            buffer_replay = self.buffer_replay
+                    else:
+                        expert_mode = True
+                        buffer_replay = self.buffer_replay_expert
 
-                if is_train and action_type == constants.PUSH and push_fail_counter >= 1:
-                    expert_mode = True
-                    buffer_replay = self.buffer_replay_expert
                     push_fail_counter = 0
-                elif is_train and action_type == constants.GRASP and grasp_fail_counter >= 1:
-                    expert_mode = True
-                    buffer_replay = self.buffer_replay_expert
+                elif (self.is_LL_train or self.is_full_train) and action_type == constants.GRASP and grasp_fail_counter >= 1:
+
+                    if self.is_full_train:
+                        if len(delta_moves) > 0:
+                            expert_mode = True
+                            buffer_replay = self.buffer_replay_expert
+                        else:
+                            expert_mode = False
+                            buffer_replay = self.buffer_replay
+                    else:
+                        expert_mode = True
+                        buffer_replay = self.buffer_replay_expert
+
                     grasp_fail_counter = 0
                 else:
                     expert_mode = False
                     buffer_replay = self.buffer_replay
 
-                # if is_train and \
-                #     (self.buffer_replay_expert.grasp_data_size < self.N_batch * 5 or \
-                #      self.buffer_replay_expert.push_data_size  < self.N_batch * 5):
-                #     expert_mode = True
-                #     buffer_replay = self.buffer_replay_expert
-                # elif is_train and action_type == constants.PUSH and push_fail_counter >= 1:
-                #     expert_mode = True
-                #     buffer_replay = self.buffer_replay_expert
-                #     push_fail_counter = 0
-                # elif is_train and action_type == constants.GRASP and grasp_fail_counter >= 1:
-                #     expert_mode = True
-                #     buffer_replay = self.buffer_replay_expert
-                #     grasp_fail_counter = 0
-                # else:
-                #     expert_mode = False
-                #     buffer_replay = self.buffer_replay
+                    #TODO [NOTE ON 20/09/2024] set both to be true current (may change later)
+                    if (self.is_LL_train or self.is_full_train):
+                        self.enable_bc        = True 
+                        self.enable_rl_critic = False
+                        self.enable_rl_actor  = False
 
-                # #decide if it should start bc
-                # if (self.buffer_replay_expert.grasp_data_size >= self.N_batch and
-                #     self.buffer_replay_expert.push_data_size  >= self.N_batch):
-                #     self.enable_bc = True                
-                #     #decide if actor should start rl
-                #     if (self.buffer_replay.grasp_data_size >= self.N_batch and 
-                #         self.buffer_replay.push_data_size  >= self.N_batch):
-                #         self.enable_rl_critic = True
-
-                #     if (self.buffer_replay.grasp_data_size >= 10*self.N_batch and 
-                #         self.buffer_replay.push_data_size  >= 10*self.N_batch):
-                #         self.enable_rl_actor = True
+                #decide N_step
+                if action_type == constants.GRASP:
+                    N_step_low_level = len(delta_moves) if expert_mode else self.N_grasp_step
+                else:
+                    N_step_low_level = len(delta_moves) if expert_mode else self.N_push_step
 
                 if self.env.N_pickable_item <= 0:
                     episode_done = True
                     continue
-
-                if action_type == constants.GRASP:
-                    if expert_mode:
-                        N_step_low_level = len(delta_moves)
-                    else:
-                        N_step_low_level = self.N_grasp_step
-                else:
-                    if expert_mode:
-                        N_step_low_level = len(delta_moves)
-                    else:    
-                        N_step_low_level = self.N_push_step
                 
                 print(f"N_step_low_level: {N_step_low_level}")
+
+                hld_step += 1
 
                 #initialise memory space for storing a complete set of actions
                 depth_states           = []
@@ -468,7 +465,7 @@ class Agent():
                     print(f"==== step: {step} N_pickable_item: {self.env.N_pickable_item} ====")
 
                     #get raw data
-                    depth_img, gripper_state, yaw_state = self.get_raw_data(action_type)
+                    depth_img, gripper_state, yaw_state = self.env.get_raw_data(action_type)
 
                     if self.is_debug:
                         print("[SUCCESS] get raw data")
@@ -487,12 +484,6 @@ class Agent():
                         #estimate action from network
                         self.grasp_actor.eval()
                         with torch.no_grad():
-                            # state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
-                            #                            torch.FloatTensor([in_gripper_state]).expand(128, 128).unsqueeze(0), 
-                            #                            torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-
-                            # action_est, normalised_action_est, gripper_action_est, z, normal, gripper_action_probs_est = self.grasp_actor.get_actions(state)
-
                             state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
                                                        torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
 
@@ -523,15 +514,13 @@ class Agent():
                         else:
                             normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
 
-                        # action, normalised_action, gripper_action = action_demo, normalised_action_demo, gripper_action_demo
-
                         action, normalised_action = action_demo, normalised_action_demo
 
                         if self.is_debug:
                             print("[SUCCESS] normalise guidance action") 
                     else:
                         # action, normalised_action, gripper_action =  action_est, normalised_action_est, gripper_action_est
-                        action, normalised_action =  action_est, normalised_action_est
+                        action, normalised_action = action_est, normalised_action_est
 
 
                     #compute action state and current q value
@@ -539,14 +528,6 @@ class Agent():
                         self.grasp_critic1.eval()
                         self.grasp_critic2.eval()
                         with torch.no_grad():
-                            # action_state = torch.concatenate([state[0], 
-                            #                                 torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                            #                                 torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                            #                                 torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                            #                                 torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0),
-                            #                                 torch.FloatTensor([gripper_action[0]]).expand(128, 128).unsqueeze(0)],
-                            #                                 dim = 0).unsqueeze(0).to(self.device)        
-
                             action_state = torch.concatenate([state[0], 
                                                               torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
                                                               torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
@@ -574,27 +555,21 @@ class Agent():
                         print("[SUCCESS] compute current q value") 
 
                     #interact with env
-                    # reward, is_success_grasp = self.env.step(action_type, 
-                    #                                          action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
-                    #                                          action.to(torch.device('cpu')).detach().numpy()[0][3], 
-                    #                                          True if gripper_action[0].item() == constants.GRASP else False,
-                    #                                          target_item_pos)
 
-                    reward, is_success_grasp = self.env.step(action_type, 
-                                                             action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
-                                                             action.to(torch.device('cpu')).detach().numpy()[0][3], 
-                                                             None,
-                                                             target_item_pos)
+                    reward, is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(action_type, 
+                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
+                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][3], 
+                                                                                                                                              None)
                     
                     is_sim_abnormal = False
-                    if i == 0 and not self.env.can_execute_action:
+                    if i == 0 and not self.env.can_execute_action and gripper_hip_height >= 0.1:
                         reward = 0.
                         print("[WARN] recorrect the reward")
                         print(f"[OVERALL REWARD] {reward}")
+                        print(f"[GRIPPER TIP HEIGHT] {gripper_hip_height}")
                         is_sim_abnormal = True
 
                     #print actions
-
                     print(f"[STEP]: {step} [ACTION TYPE]: {action_type}")  
                     move_msg  = f"[MOVE] xyz: {action.to(torch.device('cpu')).detach().numpy()[0][0:3]}"
                     move_msg += f" yaw: {np.rad2deg(action.to(torch.device('cpu')).detach().numpy()[0][3])}"
@@ -611,16 +586,11 @@ class Agent():
                         self.env.is_out_of_working_space or 
                         not self.env.can_execute_action or 
                         self.env.is_collision_to_ground or
-                        self.env.gripper_cannot_operate):
+                        self.env.gripper_cannot_operate or 
+                        is_push):
                         action_done = True
                     else:
                         action_done = False                       
-
-                    #get next raw data
-                    next_depth_img, next_gripper_state, next_yaw_state = self.get_raw_data(action_type)
-
-                    if self.is_debug:
-                        print("[SUCCESS] get next raw data")
 
                     #get next state (no use in demo gathering)
                     next_in_depth_img, next_in_gripper_state, next_in_yaw_state = self.preprocess_state(depth_img     = next_depth_img, 
@@ -635,10 +605,6 @@ class Agent():
                         #estimate action from network
                         self.grasp_actor.eval()
                         with torch.no_grad():
-                            # next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
-                            #                                 torch.FloatTensor([next_in_gripper_state]).expand(128, 128).unsqueeze(0), 
-                            #                                 torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-                            # next_action_est, next_normalised_action_est, next_gripper_action_est, next_z, next_normal, next_gripper_action_probs_est = self.grasp_actor.get_actions(next_state)
 
                             next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
                                                             torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
@@ -650,7 +616,6 @@ class Agent():
                         with torch.no_grad():
                             next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
                                                            torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-                            # next_action_est, next_normalised_action_est, next_gripper_action_est, next_z, next_normal, next_gripper_action_probs_est = self.push_actor.get_actions(next_state)
 
                             next_action_est, next_normalised_action_est, _, _ = self.push_actor.get_actions(next_state)            
 
@@ -688,13 +653,6 @@ class Agent():
                         self.grasp_critic2_target.eval()
 
                         with torch.no_grad():
-                            # next_action_state = torch.concatenate([next_state[0], 
-                            #                                     torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                            #                                     torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                            #                                     torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                            #                                     torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0),
-                            #                                     torch.FloatTensor([next_gripper_action[0]]).expand(128, 128).unsqueeze(0)],
-                            #                                     dim = 0).unsqueeze(0).to(self.device)        
 
                             next_action_state = torch.concatenate([next_state[0], 
                                                                 torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
@@ -731,15 +689,6 @@ class Agent():
                     if expert_mode:
                         bc_loss_no_reduce = nn.MSELoss(reduction = 'none')(normalised_action_est.float(), normalised_action.float())
                         bc_loss_no_reduce = torch.mean(bc_loss_no_reduce, dim=1)
-
-                        # if action_type == constants.GRASP:
-                        #     ce_loss_no_reduce  = nn.CrossEntropyLoss(reduction = 'none')(gripper_action_probs_est, gripper_action.long()[0])*self.gripper_loss_weight
-                        #     bc_loss_no_reduce += ce_loss_no_reduce
-
-                            # print(f"[LOSS] ce_loss : {ce_loss_no_reduce.item()}, mse_loss: {bc_loss_no_reduce.item() - ce_loss_no_reduce.item()}")
-
-                        # print(f"[LOSS] mse_loss: {bc_loss_no_reduce.item()}")
-
                         actor_loss = torch.mean(bc_loss_no_reduce, dim = 0)
                     else:
                         actor_loss = None
@@ -757,10 +706,8 @@ class Agent():
                     next_yaw_states.append(next_yaw_state)
 
                     actions.append(action.to(torch.device('cpu')).detach().numpy()[0])
-                    # gripper_actions.append(gripper_action.cpu())
                     gripper_actions.append(None)
                     next_actions.append(next_action.to(torch.device('cpu')).detach().numpy()[0])
-                    # next_gripper_actions.append(next_gripper_action.cpu())
                     next_gripper_actions.append(None)       
 
                     action_types.append(action_type)
@@ -782,10 +729,11 @@ class Agent():
                         break 
                     elif action_done:
 
-                        
-                        if  is_success_grasp or i == N_step_low_level - 1:
+                        if  is_success_grasp or i == N_step_low_level - 1 or is_push:
                             if is_success_grasp:
                                 print("[SUCCESS] grasp an item")
+                            elif is_push:
+                                print("[SUCCESS] perform push action")
                             else:
                                 print("[SUCCESS] finish an action")
                                 
@@ -808,7 +756,13 @@ class Agent():
                             self.env.is_collision_to_ground or 
                             self.env.gripper_cannot_operate):
 
-                            self.env.reset(reset_item = False)
+                            if expert_mode and not self.env.can_execute_action:
+                                #if expert mode's motion is not executable + agent fails => 
+                                #infinite loop => reset the items on the ground
+                                self.env.reset(reset_item = True)
+                            else:
+                                self.env.reset(reset_item = False)
+
                             is_env_reset = True
                             print("[WARN] stop executing this action!")
                         
@@ -816,8 +770,14 @@ class Agent():
                 
                 print("=== end of action ===")
 
-                #update previous action type
-                previous_action_type = action_type
+                #return home
+                self.env.return_home(is_env_reset, action_type)
+                is_env_reset = False
+
+                if self.is_debug:
+                    print("[SUCCESS] return home")
+
+                time.sleep(0.5) 
 
                 #store transition experience of low-level behaviour  
                 depth_states         = np.array(depth_states)
@@ -840,31 +800,37 @@ class Agent():
                     print("[FAIL] GRASP OR PUSH ACTION")
 
                 #record if this action is successful or fail
-                if is_train:
+                if self.is_LL_train or self.is_full_train:
 
-                    for i in range(len(depth_states)): 
+                    #save low-level action to buffer
+                    for ii in range(len(depth_states)): 
                         #only save successful experience when in expert mode
-                        if expert_mode and (rewards > 0).sum() <= 0 or is_sim_abnormal:
+                        if (expert_mode and (rewards > 0).sum() <= 0) or is_sim_abnormal:
                             continue
+                        
+                        #skip storing experience when rl mode doesn't turn on at all
+                        if not expert_mode and (not self.enable_rl_actor and not self.enable_rl_critic):
+                            continue 
 
-                        buffer_replay.store_transition(depth_states[i], 
-                                                    gripper_states[i],
-                                                    yaw_states[i],
-                                                    actions[i], 
-                                                    gripper_actions[i], 
-                                                    next_actions[i],
-                                                    next_gripper_actions[i],
-                                                    action_types[i],
-                                                    rewards[i], 
-                                                    next_depth_states[i], 
-                                                    next_gripper_states[i],
-                                                    next_yaw_states[i],
-                                                    action_dones[i], 
-                                                    0., 
-                                                    0.,
-                                                    True if (rewards > 0).sum() > 0 else False,
-                                                    actor_losses[i], 
-                                                    critic_losses[i]) 
+                        buffer_replay.store_transition(depth_states[ii], 
+                                                       gripper_states[ii],
+                                                       yaw_states[ii],
+                                                       actions[ii], 
+                                                       gripper_actions[ii], 
+                                                       next_actions[ii],
+                                                       next_gripper_actions[ii],
+                                                       action_types[ii],
+                                                       rewards[ii], 
+                                                       next_depth_states[ii], 
+                                                       next_gripper_states[ii],
+                                                       next_yaw_states[ii],
+                                                       action_dones[ii], 
+                                                       0., 
+                                                       0.,
+                                                       True if (rewards > 0).sum() > 0 else False,
+                                                       actor_losses[ii], 
+                                                       critic_losses[ii]) 
+                    
                     if self.is_debug:
                         print('[SUCCESS] store transition experience for low-level action')   
 
@@ -873,42 +839,127 @@ class Agent():
                     if self.is_debug:
                         print('[SUCCESS] online update')
 
-                    if not is_sim_abnormal:
-                        if not expert_mode and action_type == constants.GRASP:
-                            self.grasp_record_list[self.grasp_record_index] = 1 if (rewards > 0).sum() > 0 else 0
-                            self.grasp_record_index += 1
-                            if self.grasp_record_index >= self.max_result_window:
-                                self.grasp_record_index = 0
+                    if not is_sim_abnormal and not expert_mode:
+                        if  action_type == constants.GRASP:
+                            
+                            #ensure 1) record the correct failure case and 2) success case
+                            #the HLD-net can choose grasping action when nothing can be grasped 
+                            if (len(delta_moves_grasp) > 0 and np.max(rewards) <= 0) or np.max(rewards) > 0:
+                                self.grasp_reward_list[self.grasp_record_index] = np.max(rewards) 
+                                self.grasp_record_index += 1
+                                if self.grasp_record_index >= self.max_result_window:
+                                    self.grasp_record_index = 0
 
-                            #update fail counter
-                            grasp_fail_counter = grasp_fail_counter + 1 if (rewards > 0).sum() <= 0 else 0 
+                                #update fail counter
+                                grasp_fail_counter = grasp_fail_counter + 1 if np.max(rewards) <= 0 else 0 
 
-                        elif not expert_mode and action_type == constants.PUSH:
-                            self.push_record_list[self.push_record_index] = 1 if (rewards > 0).sum() > 0 else 0
+                        elif action_type == constants.PUSH and len(delta_moves_push) > 0:
+
+                            self.push_reward_list[self.push_record_index] = np.max(rewards) 
                             self.push_record_index += 1
                             if self.push_record_index >= self.max_result_window:
                                 self.push_record_index = 0
 
                             #update fail counter
-                            push_fail_counter = push_fail_counter + 1 if (rewards > 0).sum() <= 0 else 0
+                            push_fail_counter = push_fail_counter + 1 if np.max(rewards) <= 0 else 0
 
                         print("[SUCCESS] record action success history")
-                    else:
-                        print("[WARN] simulation unstable")
 
-                    #save model
+                    #save low-level network model
                     self.save_models(action_type, episode_done, expert_mode)
 
-                    #save agent data
-                    self.save_agent_data()
+                    if self.is_full_train:
+                        
+                        if not is_sim_abnormal:
+                            #save hld experience
+                            if action_type == constants.GRASP:
+                                hld_reward = 1.0 if np.max(rewards) > 0 else 0.
+                            else:
+                                if np.max(rewards) == 1.:
+                                    hld_reward = 0.5 #for pushing clustered item
+                                elif np.max(rewards) == 0.1:
+                                    hld_reward = 0.1 #for pushing non-clustered item
+                                else: 
+                                    hld_reward = 0.0 #for pushing nothing
 
-                    if self.is_debug:
-                        print("[SUCCESS] save agent data")
+                            if self.env.N_pickable_item <= 0:
+                                hld_reward += 5.0
 
-            if is_train and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
-                self.buffer_replay_expert.save_all_exp_to_dir()
-                self.buffer_replay.save_all_exp_to_dir()
+                            #compute experience priority
+                            #get raw data
+                            _, next_hld_depth_img = self.env.get_rgbd_data()
 
+                            in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img     = next_hld_depth_img, 
+                                                                                gripper_state = None, 
+                                                                                yaw_ang       = None)
+                            
+                            next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
+
+                            self.hld_net.eval()
+                            self.hld_net_target.eval()
+                            with torch.no_grad():
+                                _, next_action_type = self.hld_net.make_decisions(next_hld_state, take_max = True)
+
+                                next_hld_q_value, _ = self.hld_net_target.make_decisions(next_hld_state, take_max = True)
+                                next_hld_q_value = next_hld_q_value[0][next_action_type]
+
+                                target_hld_q_values = hld_reward + (1. - episode_done)*self.gamma*next_hld_q_value
+
+                                current_hld_q = hld_q_values[0][action_type]
+                                hld_critic_loss = nn.MSELoss()(current_hld_q, target_hld_q_values).to(torch.device('cpu')).detach().numpy()
+
+                                print(f"[HLD reward] r: {hld_reward}")
+                                print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][action_type]}, next q: {target_hld_q_values}, action type: {action_type} next action type: {next_action_type}")
+                                print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
+
+                            self.append_hld_exp(hld_depth_img, action_types[0], hld_reward, next_hld_depth_img, episode_done, hld_critic_loss)
+
+                            self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
+                                                                    self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_loss[-1])
+                        
+                        #update hld-net
+                        self.online_update_hld()
+
+                        if self.is_debug:
+                            print('[SUCCESS] online update')
+
+                #save agent data
+                self.save_agent_data()
+
+                if self.is_debug:
+                    print("[SUCCESS] save agent data")
+
+            print("=== end of episode ===")
+
+            if self.is_full_train:
+                if self.env.N_pickable_item <= 0:
+                    self.hld_record_list[self.hld_record_index] = 1
+                else:
+                    self.hld_record_list[self.hld_record_index] = 0
+
+                self.hld_step_list[self.hld_record_index] = hld_step
+
+                #update hld record index
+                self.hld_record_index += 1
+                if self.hld_record_index >= self.max_result_window:
+                    self.hld_record_index = 0
+
+                #save hld-net model
+                self.save_models_hld()
+
+                #save agent data
+                self.save_agent_data()
+                
+            if (self.is_LL_train or self.is_full_train) and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
+                if self.enable_bc:
+                    self.buffer_replay_expert.save_all_exp_to_dir()
+                    print("[SUCCESS] update all bc experience priorities")
+                if self.enable_rl_actor or self.enable_rl_critic:
+                    self.buffer_replay.save_all_exp_to_dir()
+                    print("[SUCCESS] update all rl experience priorities")
+                if self.is_full_train:
+                    self.buffer_replay_hld.save_all_exp_to_dir()
+                    print("[SUCCESS] update all hld-net experience priorities")
                 print("[SUCCESS] update all experience priorities")
 
             #update episode
@@ -980,6 +1031,60 @@ class Agent():
 
         return state_batch, action_state_batch if actions is not None else None
 
+    def online_update_hld(self):
+
+        if self.buffer_replay_hld.N_data <= 1:
+            return
+
+        self.hld_net.train()
+        self.hld_net_target.eval()
+
+        # batch, batch_depth_states, batch_action_types, batch_rewards, batch_next_depth_states, batch_dones
+        exp = self.buffer_replay_hld.sample_buffer(self.N_batch_hld)
+
+        N_exp = len(exp[0])
+        print(f"N_hld_exp: {N_exp}")
+
+        action_batch = torch.FloatTensor(exp[2]).long().unsqueeze(0).to(self.device)
+        reward_batch = torch.FloatTensor(exp[3]).unsqueeze(0).to(self.device)
+        done_batch   = torch.FloatTensor(exp[5]).unsqueeze(0).to(self.device)
+
+        state_batch      = torch.zeros(exp[1].shape[0], 1, 128, 128).to(self.device)
+        next_state_batch = torch.zeros(exp[4].shape[0], 1, 128, 128).to(self.device)
+
+        for i in range(len(exp[1])):
+            #preprocess states
+            depth_state, _, _ = self.preprocess_state(depth_img     = exp[1][i],
+                                                      gripper_state = None,
+                                                      yaw_ang       = None)
+            
+            state_batch[i] = torch.FloatTensor(depth_state).unsqueeze(0)
+
+            #preprocess states
+            next_depth_state, _, _ = self.preprocess_state(depth_img     = exp[4][i],
+                                                           gripper_state = None,
+                                                           yaw_ang       = None)
+            
+            next_state_batch[i] = torch.FloatTensor(next_depth_state).unsqueeze(0)
+
+        q_values = self.hld_net(state_batch)[torch.arange(N_exp), action_batch]
+
+        with torch.no_grad():
+            next_actions = self.hld_net(next_state_batch).argmax(dim=1).unsqueeze(0).long()
+            
+            next_q_values = self.hld_net_target(next_state_batch)[torch.arange(N_exp), next_actions]
+            target_q_values = reward_batch + (1 - done_batch)*(self.gamma * next_q_values)
+
+        # Compute the loss (Mean Squared Error between the target and the predicted Q-values)
+        loss = nn.MSELoss()(q_values, target_q_values)
+
+        # Perform gradient descent to minimize the loss
+        self.hld_net.optimiser.zero_grad()
+        loss.backward()
+        self.hld_net.optimiser.step()
+
+        self.soft_update(self.hld_net, self.hld_net_target, self.tau_hld)
+
     def online_update(self, action_type):
         
         #     0,                  1,                    2,                3,
@@ -991,10 +1096,10 @@ class Agent():
         #          12,                 13
         # batch_dones, batch_success_mask
         
-        if not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data:
+        if (self.enable_rl_actor or self.enable_rl_actor) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
             return 
         
-        if not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data:
+        if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
             return
 
         if not self.enable_rl_critic and not self.enable_rl_actor and not self.enable_bc:
@@ -1387,17 +1492,49 @@ class Agent():
 
         return rl_loss
         
+    def save_models_hld(self):
+
+        #save hld model
+        hld_success_rate = np.sum(self.hld_record_list)/self.max_result_window
+        print(f"[HLD SUCCESS RATE] hld_success_rate: {hld_success_rate*100.}%/{self.best_hld_success_rate*100.}%")
+        self.hld_success_rate_hist.append(hld_success_rate)
+        
+        hld_step_mean = np.sum(self.hld_step_list)/(np.array(self.hld_step_list) > 0).sum()
+        print(f"[HLD STEP MEAN] hld_step mean: {hld_step_mean}/{self.best_hld_step_mean}")
+        self.hld_step_mean_hist.append(hld_step_mean)
+
+        if self.best_hld_success_rate < hld_success_rate:
+            self.best_hld_success_rate = hld_success_rate
+            self.best_hld_step_mean    = hld_step_mean
+            
+            self.hld_net.save_checkpoint(True)
+            self.hld_net_target.save_checkpoint(True)
+
+            print("[SUCCESS] save best hld models")
+
+        elif self.best_hld_success_rate == hld_success_rate and hld_step_mean < self.best_hld_step_mean:
+            self.best_hld_step_mean    = hld_step_mean
+            self.best_hld_success_rate = hld_success_rate
+            self.hld_net.save_checkpoint(True)
+            self.hld_net_target.save_checkpoint(True)
+
+            print("[SUCCESS] save best hld models")
+
+        self.hld_net.save_checkpoint()
+        self.hld_net_target.save_checkpoint()
+        print("[SUCCESS] save hld models check point")
+
     def save_models(self, action_type, episode_done, expert_mode):
 
         if action_type == constants.GRASP:
             #save grasp network
-            grasp_success_rate = np.sum(self.grasp_record_list)/self.max_result_window
-            print(f"[SUCCESS RATE] grasp_success_rate: {grasp_success_rate}/{self.best_grasp_success_rate}")
+            grasp_reward_sum = np.sum(self.grasp_reward_list)
+            print(f"[GRASP REWARD SUM] grasp_reward_sum: {grasp_reward_sum}/{self.best_grasp_reward_sum}")
             if not expert_mode and (self.enable_rl_critic or self.enable_rl_actor or self.enable_bc):
-                self.grasp_success_rate_hist.append(grasp_success_rate)
+                self.grasp_reward_sum_hist.append(grasp_reward_sum)
             
-            if not expert_mode and self.best_grasp_success_rate < grasp_success_rate:
-                self.best_grasp_success_rate = grasp_success_rate
+            if not expert_mode and self.best_grasp_reward_sum < grasp_reward_sum:
+                self.best_grasp_reward_sum = grasp_reward_sum
                 self.grasp_actor.save_checkpoint(True)
                 self.grasp_critic1.save_checkpoint(True)
                 self.grasp_critic2.save_checkpoint(True)
@@ -1406,13 +1543,13 @@ class Agent():
                 print("[SUCCESS] save best grasp models")
         else:
             #save push network
-            push_success_rate = np.sum(self.push_record_list)/self.max_result_window
+            push_reward_sum = np.sum(self.push_reward_list)
+            print(f"[PUSH REWARD SUM] push_reward_sum: {push_reward_sum}/{self.best_push_reward_sum}")
             if not expert_mode and (self.enable_rl_critic or self.enable_rl_actor or self.enable_bc):            
-                self.push_success_rate_hist.append(push_success_rate)
-            print(f"[SUCCESS RATE] push_success_rate: {push_success_rate}/{self.best_push_success_rate}")
-
-            if not expert_mode and self.best_push_success_rate < push_success_rate:
-                self.best_push_success_rate = push_success_rate
+                self.push_reward_sum_hist.append(push_reward_sum)
+ 
+            if not expert_mode and self.best_push_reward_sum < push_reward_sum:
+                self.best_push_reward_sum = push_reward_sum
                 self.push_actor.save_checkpoint(True)
                 self.push_critic1.save_checkpoint(True)
                 self.push_critic2.save_checkpoint(True)
@@ -1436,10 +1573,25 @@ class Agent():
             print("[SUCCESS] save push models check point")
         
     def load_models(self):
-    
+        
+        #load hld-net
         try:
+            if self.is_full_train:
+                self.hld_net.load_checkpoint()
+                self.hld_net_target.load_checkpoint()
+                print("[LOAD MODEL] load hld-net check point")
+            else:
+                self.hld_net.load_checkpoint()
+                self.hld_net_target.load_checkpoint()
+                print("[LOAD MODEL] load hld-net best model")
 
-            if self.is_train:
+            print("[SUCCESS] load hld-net model")
+        except:
+            print("[FAIL] load hld-net model")  
+
+        #load grasp-net
+        try:
+            if self.is_LL_train or self.is_full_train:
                 self.grasp_actor.load_checkpoint()
                 self.grasp_critic1.load_checkpoint()
                 self.grasp_critic2.load_checkpoint()
@@ -1458,8 +1610,9 @@ class Agent():
         except:
             print("[FAIL] load grasp model")  
 
+        #load push-net
         try:
-            if self.is_train:
+            if self.is_LL_train or self.is_full_train:
                 self.push_actor.load_checkpoint()
                 self.push_critic1.load_checkpoint()
                 self.push_critic2.load_checkpoint()
@@ -1482,16 +1635,46 @@ class Agent():
 
         file_name = os.path.join(self.checkpt_dir, "agent_data.pkl")
 
+        # self.grasp_reward_list = [0]*self.max_result_window
+        # self.push_reward_list  = [0]*self.max_result_window
+        # self.hld_record_list   = [0]*self.max_result_window
+        # self.hld_step_list     = []
+
+        # self.grasp_record_index = 0
+        # self.push_record_index  = 0
+        # self.hld_record_index   = 0
+
+        # self.best_grasp_reward_sum = -np.inf
+        # self.best_push_reward_sum  = -np.inf
+        # self.best_hld_success_rate = -np.inf
+        # self.best_hld_step_mean    =  np.inf
+
+        # self.grasp_reward_sum_hist = []
+        # self.push_reward_sum_hist  = []
+        # self.hld_success_rate_hist = []
+        # self.hld_step_mean_hist    = []
+
         data_dict = {
             'bc_lambda': self.bc_lambda,
-            'grasp_record_list': self.grasp_record_list,
-            'push_record_list': self.push_record_list,
+
+            'grasp_reward_list': self.grasp_reward_list,
+            'push_reward_list': self.push_reward_list,
+            'hld_record_list': self.hld_record_list,
+            'hld_step_list': self.hld_step_list,
+
             'grasp_record_index': self.grasp_record_index, 
             'push_record_index': self.push_record_index,
-            'best_grasp_success_rate': self.best_grasp_success_rate,
-            'best_push_success_rate': self.best_push_success_rate,
-            'grasp_success_rate_hist': self.grasp_success_rate_hist,
-            'push_success_rate_hist': self.push_success_rate_hist
+            'hld_record_index': self.hld_record_index,
+
+            'best_grasp_reward_sum': self.best_grasp_reward_sum,
+            'best_push_reward_sum': self.best_push_reward_sum,
+            'best_hld_success_rate': self.best_hld_success_rate,
+            'best_hld_step_mean': self.best_hld_step_mean,
+
+            'grasp_reward_sum_hist': self.grasp_reward_sum_hist,
+            'push_reward_sum_hist': self.push_reward_sum_hist,
+            'hld_success_rate_hist': self.hld_success_rate_hist,
+            'hld_step_mean_hist': self.hld_step_mean_hist
         }
 
         with open(file_name, 'wb') as file:
@@ -1502,14 +1685,42 @@ class Agent():
         with open(file_name, 'rb') as file:
             data_dict = pickle.load(file)
 
+            # self.grasp_reward_list = [0]*self.max_result_window
+            # self.push_reward_list  = [0]*self.max_result_window
+            # self.hld_record_list   = [0]*self.max_result_window
+            # self.hld_step_list     = []
+
+            # self.grasp_record_index = 0
+            # self.push_record_index  = 0
+            # self.hld_record_index   = 0
+
+            # self.best_grasp_reward_sum = -np.inf
+            # self.best_push_reward_sum  = -np.inf
+            # self.best_hld_success_rate = -np.inf
+            # self.best_hld_step_mean    =  np.inf
+            
+            # self.grasp_reward_sum_hist = []
+            # self.push_reward_sum_hist  = []
+            # self.hld_success_rate_hist = []
+            # self.hld_step_mean_hist    = []
+
             self.bc_lambda               = data_dict['bc_lambda']     
-            self.grasp_record_list       = data_dict['grasp_record_list']
-            self.push_record_list        = data_dict['push_record_list']
+            
+            self.grasp_reward_list       = data_dict['grasp_reward_list']
+            self.push_reward_list        = data_dict['push_reward_list']
+            self.hld_record_list         = data_dict['hld_record_list']
+            self.hld_step_list           = data_dict['hld_step_list']
+            
             self.grasp_record_index      = data_dict['grasp_record_index']
             self.push_record_index       = data_dict['push_record_index']
-            self.best_grasp_success_rate = data_dict['best_grasp_success_rate']
-            self.best_push_success_rate  = data_dict['best_push_success_rate']
-            self.grasp_success_rate_hist = data_dict['grasp_success_rate_hist']
-            self.push_success_rate_hist  = data_dict['push_success_rate_hist']
+            self.hld_record_index        = data_dict['hld_record_index']
+            
+            self.best_grasp_reward_sum = data_dict['best_grasp_reward_sum']
+            self.best_push_reward_sum  = data_dict['best_push_reward_sum']
+            self.best_hld_success_rate = data_dict['best_hld_success_rate']
+            self.best_hld_step_mean    = data_dict['best_hld_step_mean']
 
-
+            self.grasp_reward_sum_hist = data_dict['grasp_reward_sum_hist']
+            self.push_reward_sum_hist  = data_dict['push_reward_sum_hist']
+            self.hld_success_rate_hist = data_dict['hld_success_rate_hist']
+            self.hld_step_mean_hist    = data_dict['hld_step_mean_hist']

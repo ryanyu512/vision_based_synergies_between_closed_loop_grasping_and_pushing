@@ -328,6 +328,9 @@ class BufferReplay():
 
     def save_one_exp_to_dir(self, data_dict):
 
+        if self.data_length >= self.max_memory_size:
+            self.data_length  = 0
+
         file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{self.data_length}" + ".pkl")
 
         with open(file_name, 'wb') as file:
@@ -335,16 +338,13 @@ class BufferReplay():
             print(f"[BUFFER] data saved {self.data_length+1}/{self.max_memory_size}")
 
             self.data_length += 1
-            if self.data_length >= self.max_memory_size:
-                self.data_length  = 0
+
  
     def load_exp_from_dir(self, checkpt_dir = None):
 
         if checkpt_dir is None:
-            #get all the file names in the checkpoint directory
             checkpt_dir = self.checkpt_dir
-            # exp_dir = os.listdir(self.checkpt_dir)
-        # else:
+
         exp_dir = os.listdir(checkpt_dir)
 
         #check the data size in hardware storage

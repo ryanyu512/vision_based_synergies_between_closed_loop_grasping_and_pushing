@@ -1,14 +1,18 @@
 import os
+import copy
 import pickle 
+import random
 import numpy as np
 
 class BufferReplay_HLD():
 
     def __init__(self, 
-                 max_memory_size = int(1000), 
-                 img_size        = 128, 
-                 alpha           = 0.6,
-                 checkpt_dir     = 'logs/demo_exp_hld'): 
+                 max_memory_size  = int(1000), 
+                 img_size         = 128, 
+                 alpha            = 0.6,
+                 prioritised_prob = 0.8,
+                 checkpt_dir      = 'logs/exp_hld',
+                 is_debug         = True): 
       
         self.max_memory_size = max_memory_size
         self.memory_cntr     = 0
@@ -20,29 +24,22 @@ class BufferReplay_HLD():
         #initialise small constant to prevent division by zero
         self.sm_c            = 1e-6
 
+        self.N_data          = 0
+
         #current depth state
         self.depth_states      = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #current action type
         self.action_types      = np.ones(self.max_memory_size)*-1
-        #next action type
-        self.next_action_types = np.ones(self.max_memory_size)*-1
         #next reward
         self.rewards           = np.zeros(self.max_memory_size)
         #next state
         self.next_depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #is done in the next state
         self.dones             = np.zeros(self.max_memory_size, dtype = bool)
-        #predicted q value: 
-        self.predict_qs        = np.zeros(self.max_memory_size)
-        #labeled q value: 
-        self.labeled_qs        = np.zeros(self.max_memory_size)
-        #predicted next q value: 
-        self.predict_next_qs   = np.zeros(self.max_memory_size)
-        #labeled next q value: 
-        self.labeled_next_qs   = np.zeros(self.max_memory_size)
         #surprise value
         self.priority          = np.ones(self.max_memory_size)
-
+        #initialise prioritised sampling probability
+        self.prioritised_prob  = prioritised_prob
 
         #initialise check point directory
         if not os.path.exists(checkpt_dir):
@@ -51,6 +48,8 @@ class BufferReplay_HLD():
 
         #check the data size in hardware storage
         self.data_length = len(os.listdir(self.checkpt_dir))
+
+        self.is_debug    = is_debug
 
         try:
             self.load_exp_from_dir()
@@ -67,30 +66,19 @@ class BufferReplay_HLD():
         self.depth_states      = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #current action type
         self.action_types      = np.ones(self.max_memory_size)*-1
-        #next action type
-        self.next_action_types = np.ones(self.max_memory_size)*-1
         #next reward
         self.rewards           = np.zeros(self.max_memory_size)
         #next state
         self.next_depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #is done in the next state
         self.dones             = np.zeros(self.max_memory_size, dtype = bool)
-        #predicted q value: 
-        self.predict_qs        = np.zeros(self.max_memory_size)
-        #labeled q value: 
-        self.labeled_qs        = np.zeros(self.max_memory_size)
-        #predicted next q value: 
-        self.predict_next_qs   = np.zeros(self.max_memory_size)
-        #labeled next q value: 
-        self.labeled_next_qs   = np.zeros(self.max_memory_size)
         #surprise value
         self.priority          = np.ones(self.max_memory_size)
 
     def store_transition(self, 
                          depth_state, action_type, reward, 
-                         next_depth_state, next_action_type, done, 
-                         predict_q, labeled_q,
-                         predict_next_q, labeled_next_q, 
+                         next_depth_state, 
+                         done, critic_loss,
                          is_save_to_dir = True):
 
         #update memory
@@ -98,17 +86,16 @@ class BufferReplay_HLD():
             self.is_full = True
             self.memory_cntr = 0
 
-        priority = np.abs(predict_q - labeled_q + self.sm_c)**self.alpha
+        self.N_data += 1
+        if self.N_data >= self.max_memory_size:
+            self.N_data = self.max_memory_size
+
+        priority = np.abs(critic_loss + self.sm_c)**self.alpha
         self.depth_states[self.memory_cntr]      = depth_state
         self.action_types[self.memory_cntr]      = action_type
         self.rewards[self.memory_cntr]           = reward
         self.next_depth_states[self.memory_cntr] = next_depth_state
-        self.next_action_types[self.memory_cntr] = next_action_type
         self.dones[self.memory_cntr]             = done
-        self.predict_qs[self.memory_cntr]        = predict_q
-        self.labeled_qs[self.memory_cntr]        = labeled_q
-        self.predict_next_qs[self.memory_cntr]   = predict_next_q
-        self.labeled_next_qs[self.memory_cntr]   = labeled_next_q
         self.priority[self.memory_cntr]          = priority
 
         if is_save_to_dir:
@@ -117,12 +104,7 @@ class BufferReplay_HLD():
                 'action_type': action_type,
                 'reward': reward,
                 'next_depth_state': next_depth_state,
-                'next_action_type': next_action_type,
                 'done': done,
-                'predict_q':  predict_q,
-                'labeled_q':  labeled_q,
-                'predict_next_q':  predict_next_q,
-                'labeled_next_q':  labeled_next_q,
                 'priority': priority,
             }
 
@@ -143,31 +125,26 @@ class BufferReplay_HLD():
         action_types      = self.action_types[:max_index]
         rewards           = self.rewards[:max_index]
         next_depth_states = self.next_depth_states[:max_index]
-        next_action_types = self.next_action_types[:max_index]
         dones             = self.dones[:max_index]
-        predict_qs        = self.predict_qs[:max_index]
-        labeled_qs        = self.labeled_qs[:max_index]
-        predict_next_qs   = self.predict_next_qs[:max_index]
-        labeled_next_qs   = self.labeled_next_qs[:max_index]
 
         return priorities, depth_states, action_types, rewards, next_depth_states, \
-               next_action_types, dones, predict_qs, labeled_qs, predict_next_qs, \
-               labeled_next_qs
-
+               dones
+    
     def sample_buffer(self, batch_size):
 
-        #          0,            1,            2,       3,                 4,     
-        # priorities, depth_states, action_types, rewards, next_depth_states, 
-        #                 5,     6,          7,          8,               9,              10
-        # next_action_types, dones, predict_qs, labeled_qs, predict_next_qs, labeled_next_qs
+        #          0,            1,            2,       3,                 4,     5
+        # priorities, depth_states, action_types, rewards, next_depth_states, dones
+
         experience = self.get_experience()
-        priorities = experience[0]
-        if priorities.sum() == 0:
-            priorities = np.ones_like(priorities)
+
+        if experience[0].sum() == 0 or random.random() >= self.prioritised_prob:
+            priorities = np.ones_like(experience[0])
+        else:
+            priorities = copy.copy(experience[0])
         probs = priorities/(priorities.sum())
 
         batch   = np.random.choice(len(experience[0]), 
-                                   batch_size,
+                                   np.min([batch_size, len(experience[0])]),
                                    replace = False, 
                                    p       = probs)
 
@@ -175,16 +152,9 @@ class BufferReplay_HLD():
         batch_action_types      = experience[2][batch]
         batch_rewards           = experience[3][batch]
         batch_next_depth_states = experience[4][batch]
-        batch_next_action_types = experience[5][batch]
-        batch_dones             = experience[6][batch]
-        batch_predict_qs        = experience[7][batch]
-        batch_labeled_qs        = experience[8][batch]
-        batch_predict_next_qs   = experience[9][batch]
-        batch_labeled_next_qs   = experience[10][batch]      
+        batch_dones             = experience[5][batch]
 
-        return batch, batch_depth_states, batch_action_types, batch_rewards, \
-               batch_next_depth_states, batch_next_action_types, batch_dones, batch_predict_qs, \
-               batch_labeled_qs, batch_predict_next_qs, batch_labeled_next_qs
+        return batch, batch_depth_states, batch_action_types, batch_rewards, batch_next_depth_states, batch_dones
 
     def save_all_exp_to_dir(self):
 
@@ -198,12 +168,7 @@ class BufferReplay_HLD():
             data_dict['action_type']      = self.action_types[i]
             data_dict['reward']           = self.rewards[i]
             data_dict['next_depth_state'] = self.next_depth_states[i]
-            data_dict['next_action_type'] = self.next_action_types[i]
             data_dict['done']             = self.dones[i]
-            data_dict['predict_q']        = self.predict_qs[i]
-            data_dict['labeled_q']        = self.labeled_qs[i]
-            data_dict['predict_next_q']   = self.predict_next_qs[i]
-            data_dict['labeled_next_q']   = self.labeled_next_qs[i]
             data_dict['priority']         = self.priority[i]
 
             file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{i}" + ".pkl")
@@ -212,13 +177,19 @@ class BufferReplay_HLD():
 
     def save_one_exp_to_dir(self, data_dict):
 
+        if self.data_length >= self.max_memory_size:
+            self.data_length  = 0
+
         file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{self.data_length}" + ".pkl")
 
         with open(file_name, 'wb') as file:
             pickle.dump(data_dict, file)
             self.data_length += 1
 
-    def load_exp_from_dir(self):
+    def load_exp_from_dir(self, checkpt_dir = None):
+
+        if checkpt_dir is None:
+            checkpt_dir = self.checkpt_dir
 
         #get all the file names in the checkpoint directory
         exp_dir     = os.listdir(self.checkpt_dir)
@@ -226,6 +197,7 @@ class BufferReplay_HLD():
         #check the data size in hardware storage
         data_length = len(exp_dir)
 
+        print(f"[LOAD HLD BUFFER] data_length: {data_length}")
         #reinitialise memory size if the max memory size is less than data_length
         if self.max_memory_size <= data_length:
             if self.max_memory_size < data_length:
@@ -246,15 +218,14 @@ class BufferReplay_HLD():
                 self.action_types[i]      = data_dict['action_type']      
                 self.rewards[i]           = data_dict['reward']            
                 self.next_depth_states[i] = data_dict['next_depth_state'] 
-                self.next_action_types[i] = data_dict['next_action_type']
                 self.dones[i]             = data_dict['done']   
-                self.predict_qs[i]        = data_dict['predict_q']         
-                self.labeled_qs[i]        = data_dict['labeled_q'] 
-                self.predict_next_qs[i]   = data_dict['predict_next_q']         
-                self.labeled_next_qs[i]   = data_dict['labeled_next_q'] 
                 self.priority[i]          = data_dict['priority'] 
 
-    def update_buffer(self, sample_ind, predict_q):
-        
-        self.predict_qs[sample_ind] = predict_q
-        self.priority[sample_ind]  = np.abs(self.predict_qs[sample_ind] - self.labeled_qs[sample_ind] + self.sm_c)**self.alpha
+            self.N_data += 1
+
+    def update_buffer(self, sample_inds, critic_loss):
+
+        for i, sample_ind in enumerate(sample_inds):
+                self.priority[sample_ind]  = np.abs(critic_loss[i] + self.sm_c)**self.alpha
+
+        print("[SUCCESS] update experience priorities")

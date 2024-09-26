@@ -14,11 +14,11 @@ class HDL_Net(nn.Module):
 
     def __init__(self,                                                         
                  N_input_channels = 1,                      #encoder input channel
-                 input_dims       = [512],                  #FLC input dimension
-                 FCL_dims         = [256, 128],             #FLC network dimension
+                 input_dims       = [1024],                 #FLC input dimension
+                 FCL_dims         = [512, 256],             #FLC network dimension
                  N_output         = 2,                      #output dimension
                  lr               = 1e-4,                   #learning rate
-                 epsilon          = 0.1,                    #epsilon for action explorations
+                 epsilon          = 0.25,                   #epsilon for action explorations
                  name             = 'hld_net',              #define the network name
                  checkpt_dir      = 'logs/models'):
         
@@ -34,32 +34,32 @@ class HDL_Net(nn.Module):
         #[(W-K+2P)/S] + 1
         self.encoder = nn.Sequential(
             #W: 128 => 64
-            nn.Conv2d(N_input_channels, 8, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(8),
-            nn.ReLU(),
-            #W: 64 => 32 
-            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(N_input_channels, 16, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(),
-            #W: 32 => 16
+            #W: 64 => 32 
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            #W: 16 => 8
+            #W: 32 => 16
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            #W: 8 => 4
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), 
+            #W: 16 => 8
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            #W: 4 => 2
+            #W: 8 => 4
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(256),
             nn.ReLU(),
-            #W: 2 => 1
+            #W: 4 => 2
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(512),
+            nn.ReLU(),
+            #W: 2 => 1
+            nn.Conv2d(512, 1024, kernel_size=3, stride=2, padding=1), 
+            nn.BatchNorm2d(1024),
             nn.ReLU(),
             nn.Flatten(),
         )
@@ -78,9 +78,10 @@ class HDL_Net(nn.Module):
         self.checkpt_dir  = checkpt_dir
 
         #check if dir exists 
+        self.name = name
         if not os.path.exists(self.checkpt_dir):
             os.makedirs(self.checkpt_dir)
-        self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_sac'))
+        self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, self.name))
 
         #initialise optimiser
         self.optimiser = optim.Adam(self.parameters(), lr = lr)
@@ -106,27 +107,42 @@ class HDL_Net(nn.Module):
 
         return q_values
     
-    def make_decisions(self, state):
+    def make_decisions(self, state, take_max = False):
         
-        if random.random() <= self.epsilon:
-            return random.randrange(self.N_output)
+        q_values = self.forward(state)
+
+        prob = random.random()
+
+        if take_max or prob > self.epsilon:
+            index = torch.argmax(q_values, dim=1).item()
+            print(f"[HLD net] max output: {index}")
         else:
-            q_values = self.forward(state)
-            return torch.argmax(q_values, dim=1).item()
+            index = random.randrange(self.N_output)
+            print(f"[HLD net] random output: {index}")
+            
+        return q_values, index
 
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpt_file)
+    def save_checkpoint(self, is_best = False):
+        if is_best:
+            torch.save(self.state_dict(), self.checkpt_file)
+        else:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
 
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpt_file))
+    def load_checkpoint(self, is_best = False):
+        if is_best:
+            self.load_state_dict(torch.load(self.checkpt_file))
+        else:
+            file = os.path.abspath(os.path.join(self.checkpt_dir, self.name + '_checkpt'))
+            self.load_state_dict(torch.load(file))
 
 class Critic(nn.Module):
 
     def __init__(self,                                                         
                  max_action       = [0.05, 0.05, 0.05, np.deg2rad(30.)], #action range 
                  N_input_channels = 2,                      #encoder input channel
-                 input_dims       = [512],                 #FLC input dimension
-                 FCL_dims         = [256, 128],             #FLC network dimension
+                 input_dims       = [1024],                 #FLC input dimension
+                 FCL_dims         = [512, 256],             #FLC network dimension
                  N_output         = 1,                      #output dimension
                  N_action         = 4,                      #action dimension
                  N_action_type    = 3,                      #action type dimension
@@ -143,32 +159,32 @@ class Critic(nn.Module):
         #[(W-K+2P)/S] + 1
         self.encoder = nn.Sequential(
             #W: 128 => 64
-            nn.Conv2d(N_input_channels, 8, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(8),
-            nn.ReLU(),
-            #W: 64 => 32 
-            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(N_input_channels, 16, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(),
-            #W: 32 => 16
+            #W: 64 => 32 
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            #W: 16 => 8
+            #W: 32 => 16
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            #W: 8 => 4
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), 
+            #W: 16 => 8
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            #W: 4 => 2
+            #W: 8 => 4
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(256),
             nn.ReLU(),
-            #W: 2 => 1
+            #W: 4 => 2
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), 
             nn.BatchNorm2d(512),
+            nn.ReLU(),
+            #W: 2 => 1
+            nn.Conv2d(512, 1024, kernel_size=3, stride=2, padding=1), 
+            nn.BatchNorm2d(1024),
             nn.ReLU(),
             nn.Flatten(),
         )
@@ -400,7 +416,6 @@ class Actor(nn.Module):
         return log_probs.float()
 
     def save_checkpoint(self, is_best = False):
-
         if is_best:
             torch.save(self.state_dict(), self.checkpt_file)
         else:
