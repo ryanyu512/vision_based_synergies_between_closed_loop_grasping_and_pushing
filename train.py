@@ -41,4 +41,4 @@ agent = Agent(env,
               tau_hld             = 0.01,
               max_step            = 500)
 
-agent.interact_test(max_episode = 500, is_LL_train = True, is_full_train = True)
+agent.interact_test(max_episode = 1000, is_LL_train = True, is_full_train = True)

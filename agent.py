@@ -845,7 +845,7 @@ class Agent():
                             #ensure 1) record the correct failure case and 2) success case
                             #the HLD-net can choose grasping action when nothing can be grasped 
                             if (len(delta_moves_grasp) > 0 and np.max(rewards) <= 0) or np.max(rewards) > 0:
-                                self.grasp_reward_list[self.grasp_record_index] = np.max(rewards) 
+                                self.grasp_reward_list[self.grasp_record_index] = 1. if np.max(rewards) > 0 else 0. 
                                 self.grasp_record_index += 1
                                 if self.grasp_record_index >= self.max_result_window:
                                     self.grasp_record_index = 0
@@ -855,7 +855,7 @@ class Agent():
 
                         elif action_type == constants.PUSH and len(delta_moves_push) > 0:
 
-                            self.push_reward_list[self.push_record_index] = np.max(rewards) 
+                            self.push_reward_list[self.push_record_index] = 1. if np.max(rewards) > 0 else 0.
                             self.push_record_index += 1
                             if self.push_record_index >= self.max_result_window:
                                 self.push_record_index = 0
@@ -873,14 +873,17 @@ class Agent():
                         if not is_sim_abnormal:
                             #save hld experience
                             if action_type == constants.GRASP:
-                                hld_reward = 1.0 if np.max(rewards) > 0 else 0.
+                                if np.max(rewards) > 0:
+                                    hld_reward =  1.0 
+                                else:
+                                    hld_reward = -1.0
                             else:
-                                if np.max(rewards) == 1.:
-                                    hld_reward = 0.5 #for pushing clustered item
-                                elif np.max(rewards) == 0.1:
-                                    hld_reward = 0.1 #for pushing non-clustered item
-                                else: 
-                                    hld_reward = 0.0 #for pushing nothing
+                                if len(delta_moves_grasp) > 0 and len(delta_moves_push) > 0:
+                                    hld_reward =  0.0 #for neutral push decision
+                                elif len(delta_moves_grasp) > 0 and len(delta_moves_push) == 0:
+                                    hld_reward = -1.0 #for incorrect push decision                               
+                                elif len(delta_moves_grasp) == 0 and len(delta_moves_push) > 0:
+                                    hld_reward =  0.5 #for correct push decision
 
                             if self.env.N_pickable_item <= 0:
                                 hld_reward += 5.0
@@ -1501,11 +1504,11 @@ class Agent():
         
         hld_step_mean = np.sum(self.hld_step_list)/(np.array(self.hld_step_list) > 0).sum()
         print(f"[HLD STEP MEAN] hld_step mean: {hld_step_mean}/{self.best_hld_step_mean}")
-        self.hld_step_mean_hist.append(hld_step_mean)
+        if (np.array(self.hld_step_list) > 0).sum() >= self.max_result_window:
+            self.hld_step_mean_hist.append(hld_step_mean)
 
         if self.best_hld_success_rate < hld_success_rate:
             self.best_hld_success_rate = hld_success_rate
-            self.best_hld_step_mean    = hld_step_mean
             
             self.hld_net.save_checkpoint(True)
             self.hld_net_target.save_checkpoint(True)
