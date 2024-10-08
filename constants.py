@@ -59,3 +59,9 @@ for i in range(2):
 MAX_POSSIBLE_DIST = MAX_POSSIBLE_DIST**0.5
 
 print(f"[MAX_POSSIBLE_DIST]: {MAX_POSSIBLE_DIST}")
+
+#define HLD mode
+
+HLD_MODE       = 0
+GRASP_ONLY     = 1
+SEQ_GRASP_PUSH = 2

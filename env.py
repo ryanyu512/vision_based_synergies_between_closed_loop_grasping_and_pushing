@@ -807,6 +807,26 @@ class Env():
 
         return reward, is_success_grasp, is_success_push
 
+    def reward_hld(self, action_type, rewards_low_level, delta_moves_grasp, delta_moves_push):
+        
+        if action_type == constants.GRASP:
+            if np.max(rewards_low_level) > 0:
+                hld_reward =  1.0 
+            else:
+                hld_reward = -1.0 
+        else:
+            if len(delta_moves_grasp) > 0 and len(delta_moves_push) > 0:
+                hld_reward =  0.0 #for neutral push decision
+            elif len(delta_moves_grasp) > 0 and len(delta_moves_push) == 0:
+                hld_reward = -1.0 #for incorrect push decision                               
+            elif len(delta_moves_grasp) == 0 and len(delta_moves_push) > 0:
+                hld_reward =  0.5 #for correct push decision
+
+        if self.env.N_pickable_item <= 0:
+            hld_reward += 5.0
+
+        return hld_reward
+
     def get_raw_data(self, action_type):
 
         _, depth_img         = self.get_rgbd_data()
