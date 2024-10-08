@@ -162,6 +162,10 @@ class Agent():
         #initialise history 
         self.r_hist    = []
         self.step_hist = []
+        #initialise buffer size
+        self.max_memory_size     = max_memory_size                  
+        self.max_memory_size_rl  = max_memory_size_rl              
+        self.max_memory_size_hld = max_memory_size_hld
 
         #initialise if debug
         self.is_debug = is_debug
@@ -368,11 +372,11 @@ class Agent():
             self.hld_mode      = constants.HLD_MODE
 
             #initialise buffer replay
-            self.buffer_replay        = BufferReplay(max_memory_size = max_memory_size_rl, 
+            self.buffer_replay        = BufferReplay(max_memory_size = self.max_memory_size_rl, 
                                                      checkpt_dir = 'logs/exp_rl')
-            self.buffer_replay_expert = BufferReplay(max_memory_size = max_memory_size, 
+            self.buffer_replay_expert = BufferReplay(max_memory_size = self.max_memory_size, 
                                                      checkpt_dir = 'logs/exp_expert')
-            self.buffer_replay_hld    = BufferReplay_HLD(max_memory_size = int(max_memory_size_hld))
+            self.buffer_replay_hld    = BufferReplay_HLD(max_memory_size = int(self.max_memory_size_hld))
             print("[SUCCESS] initialise memory buffer")
 
 
