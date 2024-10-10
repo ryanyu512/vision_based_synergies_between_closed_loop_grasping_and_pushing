@@ -170,6 +170,9 @@ class Agent():
         #initialise if debug
         self.is_debug = is_debug
 
+        #define if the agent is in evaluation mode
+        self.is_eval = None
+
         #initialise save interval
         self.save_all_exp_interval = save_all_exp_interval
 
@@ -190,7 +193,6 @@ class Agent():
 
         #for evaluation record
         self.max_result_window_eval = max_result_window_eval
-        self.hld_record_eval        = [0]*self.max_result_window_eval
         self.CR_eval                = [0]*self.max_result_window_eval
         self.AGS_eval               = [0]*self.max_result_window_eval
         self.ATC_eval               = [0]*self.max_result_window_eval
@@ -224,6 +226,8 @@ class Agent():
         #initialise grasp and push fail counter
         self.grasp_fail_counter = 0
         self.push_fail_counter  = 0
+
+
 
     def preprocess_state(self, depth_img, gripper_state, yaw_ang, is_grasp = True):
         
@@ -359,7 +363,6 @@ class Agent():
     def interact(self,
                  max_episode   = 1,
                  hld_mode      = constants.HLD_MODE,
-                 is_full_train = False,
                  is_eval       = False):
 
         if is_eval:
@@ -368,7 +371,7 @@ class Agent():
             self.hld_mode      = hld_mode
         else:
             self.is_eval       = is_eval
-            self.is_full_trian = is_full_train
+            self.is_full_trian = False
             self.hld_mode      = constants.HLD_MODE
 
             #initialise buffer replay
@@ -501,13 +504,13 @@ class Agent():
                     self.grasp_fail_counter = 0
                 else:
                     expert_mode = False
-                    buffer_replay = self.buffer_replay
-                    
+
                     if self.is_eval:
                         self.enable_bc        = False 
                         self.enable_rl_critic = False
                         self.enable_rl_actor  = False
                     else:
+                        buffer_replay         = self.buffer_replay
                         self.enable_bc        = True 
                         self.enable_rl_critic = False
                         self.enable_rl_actor  = False
@@ -856,21 +859,21 @@ class Agent():
                 time.sleep(0.5) 
 
                 #store transition experience of low-level behaviour  
-                depth_states         = np.array(depth_states)
-                gripper_states       = np.array(gripper_states)
-                yaw_states           = np.array(yaw_states)
-                actions              = np.array(actions)
-                gripper_actions      = np.array(gripper_actions)
-                next_actions         = np.array(next_actions)
-                next_gripper_actions = np.array(next_gripper_actions)
-                action_types         = np.array(action_types)
-                rewards              = np.array(rewards)
-                next_depth_states    = np.array(next_depth_states)
-                action_dones         = np.array(action_dones)
-                actor_losses         = np.array(actor_losses)
-                critic_losses        = np.array(critic_losses)
+                self.depth_states         = np.array(self.depth_states)
+                self.gripper_states       = np.array(self.gripper_states)
+                self.yaw_states           = np.array(self.yaw_states)
+                self.actions              = np.array(self.actions)
+                self.gripper_actions      = np.array(self.gripper_actions)
+                self.next_actions         = np.array(self.next_actions)
+                self.next_gripper_actions = np.array(self.next_gripper_actions)
+                self.action_types         = np.array(self.action_types)
+                self.rewards              = np.array(self.rewards)
+                self.next_depth_states    = np.array(self.next_depth_states)
+                self.action_dones         = np.array(self.action_dones)
+                self.actor_losses         = np.array(self.actor_losses)
+                self.critic_losses        = np.array(self.critic_losses)
 
-                if (rewards > 0).sum() > 0:
+                if (self.rewards > 0).sum() > 0:
                     print("[SUCCESS] GRASP OR PUSH ACTION")
                 else:
                     print("[FAIL] GRASP OR PUSH ACTION")
@@ -879,12 +882,12 @@ class Agent():
                 if not is_sim_abnormal and not expert_mode:
 
                     #record success rate of low-level actions network
-                    self.record_success_rate(action_type, rewards, delta_moves_grasp, delta_moves_push)
+                    self.record_success_rate(action_type, self.rewards, delta_moves_grasp, delta_moves_push)
 
                     #record grasping efficiency
                     if action_type == constants.GRASP:
                         grasp_counter += 1
-                        if np.max(rewards) > 0:
+                        if np.max(self.rewards) > 0:
                             grasp_success_counter += 1
 
                     #check if we should change to full training mode
@@ -898,9 +901,9 @@ class Agent():
                 if not self.is_eval:
 
                     #save low-level action to buffer
-                    for ii in range(len(depth_states)): 
+                    for ii in range(len(self.depth_states)): 
                         #only save successful experience when in expert mode
-                        if (expert_mode and (rewards > 0).sum() <= 0) or is_sim_abnormal:
+                        if (expert_mode and (self.rewards > 0).sum() <= 0) or is_sim_abnormal:
                             continue
                         
                         #skip storing experience when rl mode doesn't turn on at all
@@ -915,7 +918,7 @@ class Agent():
                                                        self.action_dones[ii], 
                                                        0., 
                                                        0.,
-                                                       True if (rewards > 0).sum() > 0 else False,
+                                                       True if (self.rewards > 0).sum() > 0 else False,
                                                        self.actor_losses[ii], self.critic_losses[ii]) 
                     
                     if self.is_debug:
@@ -933,7 +936,7 @@ class Agent():
                         
                         if not is_sim_abnormal:
 
-                            hld_reward = self.env.reward_hld(action_type, rewards, delta_moves_grasp, delta_moves_push)
+                            hld_reward = self.env.reward_hld(action_type, self.rewards, delta_moves_grasp, delta_moves_push)
 
                             #get raw data
                             _, next_hld_depth_img = self.env.get_rgbd_data()
@@ -962,7 +965,7 @@ class Agent():
                                 print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][action_type]}, next q: {target_hld_q_values}, action type: {action_type} next action type: {next_action_type}")
                                 print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
 
-                            self.append_hld_exp(hld_depth_img, action_types[0], hld_reward, next_hld_depth_img, episode_done, hld_critic_loss)
+                            self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, episode_done, hld_critic_loss)
 
                             self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
                                                                     self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_loss[-1])
@@ -983,11 +986,10 @@ class Agent():
 
             if self.is_eval:
                 if self.env.N_pickable_item <= 0:
-                    self.hld_record_eval[self.eval_index] = 1
+                    self.CR_eval[self.eval_index] = 1
                 else:
-                    self.hld_record_eval[self.eval_index] = 0
+                    self.CR_eval[self.eval_index] = 0
 
-                self.CR_eval[self.eval_index]  = np.sum(self.hld_record_eval[self.eval_index])/self.max_result_window_eval
                 self.AGS_eval[self.eval_index] = grasp_success_counter/grasp_counter
                 self.ATC_eval[self.eval_index] = hld_step
 
@@ -995,6 +997,9 @@ class Agent():
                 self.eval_index += 1
                 if self.eval_index >= self.max_result_window_eval:
                     self.eval_index = 0
+
+                #save agent data
+                self.save_agent_data()
 
             elif self.is_full_train:
                 if self.env.N_pickable_item <= 0:
@@ -1010,8 +1015,7 @@ class Agent():
                     self.hld_record_index = 0
 
                 #save hld-net model
-                if not self.is_eval:
-                    self.save_models_hld()
+                self.save_models_hld()
 
                 #save agent data
                 self.save_agent_data()
@@ -1707,7 +1711,6 @@ class Agent():
             data_dict = {
                 'max_result_window_eval': self.max_result_window_eval,
 
-                'hld_record_eval': self.hld_record_eval,
                 'CR_eval': self.CR_eval,
                 'AGS_eval': self.AGS_eval,
                 'ATC_eval': self.ATC_eval,
@@ -1745,7 +1748,7 @@ class Agent():
 
     def load_agent_data(self):
 
-        if self.eval:
+        if self.is_eval:
             file_name = os.path.join(self.checkpt_dir, f"agent_data_eval_{self.hld_mode}.pkl")
             with open(file_name, 'rb') as file:
                 data_dict = pickle.load(file)
