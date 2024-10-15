@@ -453,7 +453,7 @@ class Agent():
                 self.action_type = constants.PUSH
                 demo_low_level_actions = delta_moves_push
 
-        return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions, delta_moves_grasp, delta_moves_push
+        return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img
 
     def get_action_from_network(self, state):
 
@@ -484,6 +484,45 @@ class Agent():
             normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
 
         return action_demo, normalised_action_demo
+
+    def get_q_value_from_critic(self, action_state, is_compute_target = False):
+
+        #compute action state and current q value
+        if self.action_type == constants.GRASP:
+            if is_compute_target:
+                self.grasp_critic1_target.eval()
+                self.grasp_critic2_target.eval()
+
+                with torch.no_grad(): 
+                    q1 = self.grasp_critic1_target(action_state)
+                    q2 = self.grasp_critic2_target(action_state)   
+            else:
+                self.grasp_critic1.eval()
+                self.grasp_critic2.eval()
+
+                with torch.no_grad(): 
+                    q1 = self.grasp_critic1(action_state)
+                    q2 = self.grasp_critic2(action_state)     
+        else:
+            if is_compute_target:
+                self.push_critic1_target.eval()
+                self.push_critic2_target.eval()
+
+                with torch.no_grad():
+                    q1 = self.push_critic1_target(action_state)
+                    q2 = self.push_critic2_target(action_state)
+            else:
+                self.push_critic1.eval()
+                self.push_critic2.eval()
+
+                with torch.no_grad():
+                    q1 = self.push_critic1(action_state)
+                    q2 = self.push_critic2(action_state)
+
+        if self.is_debug:
+            print("[SUCCESS] compute current q value") 
+
+        return q1, q2
 
     def is_expert_mode(self, demo_low_level_actions):
 
@@ -554,7 +593,7 @@ class Agent():
                 time.sleep(0.5) 
 
                 #get high - level decision (grasp or push)
-                hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push = self.get_hld_decision()
+                hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img = self.get_hld_decision()
 
                 #decide if it should enter demo mode
                 expert_mode, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
@@ -603,39 +642,18 @@ class Agent():
                     else:
                         action, normalised_action = action_est, normalised_action_est
 
-                    #compute action state and current q value
-                    if self.action_type == constants.GRASP:
-                        self.grasp_critic1.eval()
-                        self.grasp_critic2.eval()
-                        with torch.no_grad():
-                            action_state = torch.concatenate([state[0], 
-                                                              torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                              torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                              torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                              torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                              dim = 0).unsqueeze(0).to(self.device)  
-
-                            current_q1 = self.grasp_critic1(action_state)
-                            current_q2 = self.grasp_critic2(action_state)     
-                    else:
-                        self.push_critic1.eval()
-                        self.push_critic2.eval()
-                        with torch.no_grad():
-                            action_state = torch.concatenate([state[0], 
-                                                              torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                              torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                              torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                              torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                              dim = 0).unsqueeze(0).to(self.device)
-
-                            current_q1 = self.push_critic1(action_state)
-                            current_q2 = self.push_critic2(action_state)
-
-                    if self.is_debug:
-                        print("[SUCCESS] compute current q value") 
-
+                    #compute current action state
+                    action_state = torch.concatenate([state[0], 
+                                                        torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
+                                                        dim = 0).unsqueeze(0).to(self.device)  
+                    
+                    #compute current q value
+                    current_q1, current_q2 = self.get_q_value_from_critic(action_state, False)
+                    
                     #interact with env
-
                     reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(self.action_type, 
                                                                                                                                               action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
                                                                                                                                               action.to(torch.device('cpu')).detach().numpy()[0][3], 
@@ -688,37 +706,17 @@ class Agent():
                         next_action, next_normalised_action = next_action_est, next_normalised_action_est
 
 
-                    #compute next action state and next q value
-                    if self.action_type == constants.GRASP:
-                        self.grasp_critic1_target.eval()
-                        self.grasp_critic2_target.eval()
+                    #compute next action state
+                    next_action_state = torch.concatenate([next_state[0], 
+                                                        torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
+                                                        dim = 0).unsqueeze(0).to(self.device)        
 
-                        with torch.no_grad():
 
-                            next_action_state = torch.concatenate([next_state[0], 
-                                                                torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                                torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                                torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                                torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                                dim = 0).unsqueeze(0).to(self.device)        
-
-                            next_q1 = self.grasp_critic1_target(next_action_state)
-                            next_q2 = self.grasp_critic2_target(next_action_state)     
-                        
-                    else:
-                        self.push_critic1_target.eval()
-                        self.push_critic2_target.eval()
-
-                        with torch.no_grad():
-                            next_action_state = torch.concatenate([next_state[0], 
-                                                                torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                                torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                                torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                                torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                                dim = 0).unsqueeze(0).to(self.device)
-
-                            next_q1 = self.push_critic1_target(next_action_state)
-                            next_q2 = self.push_critic2_target(next_action_state)  
+                    #compute next q value
+                    next_q1, next_q2 = self.get_q_value_from_critic(next_action_state, True)
 
                     next_q   = torch.min(next_q1, next_q2)  
                     target_q = reward + (1 - action_done) * self.gamma * next_q
