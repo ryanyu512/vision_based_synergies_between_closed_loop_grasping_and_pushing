@@ -54,7 +54,7 @@ class Agent():
                  max_memory_size        = 25000,                  #define the max. size of buffer for bc (low-level action network)
                  max_memory_size_rl     = 25000,                  #define the max. size of buffer for rl (low-level action network)
                  max_memory_size_hld    = 25000,                  #define the max. size of buffer for hld network
-                 max_step               = 500,                    #max low-level action step for one episode
+                 max_action_taken       = 50,                     #max number of action taken for one episode
                  success_rate_threshold = 0.7,                    #define the threshold for switching to full training mode
                  save_all_exp_interval  = 20,                     #mainly used for update all experience's priority
                  max_result_window      = 100,                    #the maximum record length for low-level action networks
@@ -159,12 +159,10 @@ class Agent():
         #initialise soft update factor
         self.tau       = tau
         self.tau_hld   = tau_hld
-        #initialise history 
-        self.r_hist    = []
-        self.step_hist = []
+
         #initialise buffer size
-        self.max_memory_size     = max_memory_size                  
-        self.max_memory_size_rl  = max_memory_size_rl              
+        self.max_memory_size = max_memory_size                  
+        self.max_memory_size_rl = max_memory_size_rl              
         self.max_memory_size_hld = max_memory_size_hld
 
         #initialise if debug
@@ -177,7 +175,7 @@ class Agent():
         self.save_all_exp_interval = save_all_exp_interval
 
         #initialise max step per episode
-        self.max_step = max_step
+        self.max_action_taken = max_action_taken
 
         #initialise check point directory
         if not os.path.exists(checkpt_dir):
@@ -193,9 +191,9 @@ class Agent():
 
         #for evaluation record
         self.max_result_window_eval = max_result_window_eval
-        self.CR_eval                = [0]*self.max_result_window_eval
-        self.AGS_eval               = [0]*self.max_result_window_eval
-        self.ATC_eval               = [0]*self.max_result_window_eval
+        self.CR_eval = [0]*self.max_result_window_eval
+        self.AGS_eval = [0]*self.max_result_window_eval
+        self.ATC_eval = [0]*self.max_result_window_eval
 
         self.eval_index = 0
 
@@ -203,29 +201,29 @@ class Agent():
         #the maximum record length that record if this action is successful or fail
         self.max_result_window = max_result_window
 
-        self.grasp_reward_list  = [0]*self.max_result_window
-        self.push_reward_list   = [0]*self.max_result_window
-        self.hld_record_list    = [0]*self.max_result_window
-        self.hld_step_list      = [0]*self.max_result_window
+        self.grasp_reward_list = [0]*self.max_result_window
+        self.push_reward_list = [0]*self.max_result_window
+        self.hld_record_list = [0]*self.max_result_window
+        self.hld_step_list = [0]*self.max_result_window
         self.grasp_record_index = 0
-        self.push_record_index  = 0
-        self.hld_record_index   = 0
+        self.push_record_index = 0
+        self.hld_record_index = 0
 
         self.best_grasp_reward_sum = -np.inf
         self.best_push_reward_sum  = -np.inf
         self.best_hld_success_rate = -np.inf
         self.best_hld_step_mean    =  np.inf
         self.grasp_reward_sum_hist = []
-        self.push_reward_sum_hist  = []
+        self.push_reward_sum_hist = []
         self.hld_success_rate_hist = []
-        self.hld_step_mean_hist    = []
+        self.hld_step_mean_hist = []
 
         #threshold for switching to full training mode (hld network + low-level action network)
         self.success_rate_threshold = success_rate_threshold
 
         #initialise grasp and push fail counter
         self.grasp_fail_counter = 0
-        self.push_fail_counter  = 0
+        self.push_fail_counter = 0
 
 
 
@@ -398,9 +396,7 @@ class Agent():
         while episode <  max_episode:
 
             #initialise episode data
-            hld_step                = 0
-            step                    = 0
-            ep_r                    = 0.
+            N_action_taken          = 0
             episode_done            = False
             action_type             = None
             is_success_grasp        = False
@@ -416,7 +412,7 @@ class Agent():
             #init hld experience
             self.init_hld_exp()
 
-            while not episode_done and step < self.max_step:
+            while not episode_done and N_action_taken < self.max_action_taken:
 
                 print(f"==== episode: {episode} ====")
 
@@ -526,9 +522,6 @@ class Agent():
                     continue
                 
                 print(f"N_step_low_level: {N_step_low_level}")
- 
-                #update HLD network step
-                hld_step += 1
 
                 #initialise memory space for storing a complete set of actions
                 self.init_lla_exp()
@@ -541,7 +534,7 @@ class Agent():
                     else:
                         print("==== AGENT MODE " + update_mode_msg + " ====") 
 
-                    print(f"==== step: {step} N_pickable_item: {self.env.N_pickable_item} ====")
+                    print(f"==== low level action step: {i} N_pickable_item: {self.env.N_pickable_item} ====")
 
                     #get raw data
                     depth_img, gripper_state, yaw_state = self.env.get_raw_data(action_type)
@@ -649,14 +642,10 @@ class Agent():
                         is_sim_abnormal = True
 
                     #print actions
-                    print(f"[STEP]: {step} [ACTION TYPE]: {action_type}")  
+                    print(f"[ACTION TYPE]: {action_type}")  
                     move_msg  = f"[MOVE] xyz: {action.to(torch.device('cpu')).detach().numpy()[0][0:3]}"
                     move_msg += f" yaw: {np.rad2deg(action.to(torch.device('cpu')).detach().numpy()[0][3])}"
                     print(move_msg)
-
-                    #update history
-                    ep_r += reward
-                    step += 1
 
                     #check if all items are picked
                     episode_done = False if self.env.N_pickable_item > 0 else True
@@ -802,9 +791,7 @@ class Agent():
 
                     #check if episode_done
                     if episode_done:
-                        print("[SUCCESS] finish one episode")
-                        self.r_hist.append(ep_r)
-                        self.step_hist.append(step)         
+                        print("[SUCCESS] finish one episode")      
                         break 
                     elif action_done:
 
@@ -848,6 +835,8 @@ class Agent():
                         break
                 
                 print("=== end of action ===")
+                #update number of action taken
+                N_action_taken += 1
 
                 #return home
                 self.env.return_home(is_env_reset, action_type)
@@ -991,7 +980,7 @@ class Agent():
                     self.CR_eval[self.eval_index] = 0
 
                 self.AGS_eval[self.eval_index] = grasp_success_counter/grasp_counter
-                self.ATC_eval[self.eval_index] = hld_step
+                self.ATC_eval[self.eval_index] = N_action_taken
 
                 #update hld record index
                 self.eval_index += 1
@@ -1007,7 +996,7 @@ class Agent():
                 else:
                     self.hld_record_list[self.hld_record_index] = 0
 
-                self.hld_step_list[self.hld_record_index] = hld_step
+                self.hld_step_list[self.hld_record_index] = N_action_taken
 
                 #update hld record index
                 self.hld_record_index += 1
