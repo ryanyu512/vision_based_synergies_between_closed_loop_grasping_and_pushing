@@ -242,27 +242,17 @@ class Agent():
         offset_depth_img = in_depth_img.astype(np.float32) - self.env.near_clip_plane
         in_depth_img = offset_depth_img/max_depth_diff
 
-        #turn gripper state into image
-        #GRIPPER_NON_CLOSE_NON_OPEN = 2, largest value
-        # max_gripper_action = constants.GRIPPER_CANNOT_OPERATE 
-        # in_gripper_state = None
-        # if gripper_state is not None and not np.isnan(gripper_state):
-        #     in_gripper_state = gripper_state/max_gripper_action
-
         #turn yaw ang into image
         in_yaw_ang = None
         if yaw_ang is not None and not np.isnan(yaw_ang):
             in_yaw_ang = utils.wrap_ang(yaw_ang)/np.math.pi
 
         if self.is_debug:
-            # if in_gripper_state is not None and (in_gripper_state < 0 or in_gripper_state > 1):
-            #     print("[ERROR] in_gripper_state < 0 or in_gripper_state > 1")
             if in_yaw_ang is not None and (in_yaw_ang < -1 or in_yaw_ang > 1):
                 print("[ERROR] in_yaw_ang < -1 or in_yaw_ang > 1")
             if np.min(in_depth_img) < 0 or np.max(in_depth_img) > 1:
                 print("[ERROR] np.min(in_depth_img) < 0 or np.max(in_depth_img) > 1") 
 
-        # return in_depth_img, in_gripper_state, in_yaw_ang
         return in_depth_img, None, in_yaw_ang
 
     def soft_update(self, critic, target_critic, tau = None):
@@ -463,13 +453,9 @@ class Agent():
                 self.action_type = constants.PUSH
                 demo_low_level_actions = delta_moves_push
 
-        return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions
+        return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions, delta_moves_grasp, delta_moves_push
 
-    def get_action_from_network(self, depth_img, yaw_state):
-
-        #get state
-        state = torch.concatenate([torch.FloatTensor(depth_img).unsqueeze(0), 
-                                   torch.FloatTensor([yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
+    def get_action_from_network(self, state):
 
         #estimate action
         if self.action_type == constants.GRASP:
@@ -484,7 +470,20 @@ class Agent():
         if self.is_debug:
             print("[SUCCESS] estimate actions from network") 
 
-        return action, normalised_action, state
+        return action, normalised_action
+
+    def get_action_from_demo(self, move):
+
+        action_demo, gripper_action_demo = np.array(move[0:self.N_action]), np.argmax(np.array(move[-2:]))
+        gripper_action_demo = torch.FloatTensor([gripper_action_demo]).unsqueeze(0).to(self.device)
+        action_demo = torch.FloatTensor(action_demo).unsqueeze(0).to(self.device)
+
+        if self.action_type == constants.GRASP:
+            normalised_action_demo = action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
+        else:
+            normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
+
+        return action_demo, normalised_action_demo
 
     def is_expert_mode(self, demo_low_level_actions):
 
@@ -528,14 +527,14 @@ class Agent():
         return is_expert, buffer_replay, N_step_low_level
 
     def interact(self,
-                 max_episode   = 1,
-                 hld_mode      = constants.HLD_MODE,
-                 is_eval       = False):
+                 max_episode = 1,
+                 hld_mode = constants.HLD_MODE,
+                 is_eval = False):
 
         #initialise interact 
         self.init_interact(is_eval, hld_mode)
 
-        #start trainiing/evaluation loop
+        #initialise episode
         episode = 0
 
         while episode < max_episode:
@@ -555,7 +554,7 @@ class Agent():
                 time.sleep(0.5) 
 
                 #get high - level decision (grasp or push)
-                hld_q_values, demo_low_level_actions  = self.get_hld_decision()
+                hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push = self.get_hld_decision()
 
                 #decide if it should enter demo mode
                 expert_mode, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
@@ -585,37 +584,24 @@ class Agent():
                         print("[SUCCESS] get raw data")
 
                     #preprocess raw data
-                    in_depth_img, in_gripper_state, in_yaw_state = self.preprocess_state(depth_img     = depth_img, 
-                                                                                         gripper_state = gripper_state, 
-                                                                                         yaw_ang       = yaw_state, 
-                                                                                         is_grasp      = self.action_type) 
+                    in_depth_img, _, in_yaw_state = self.preprocess_state(depth_img = depth_img, 
+                                                                          gripper_state = gripper_state, 
+                                                                          yaw_ang = yaw_state, 
+                                                                          is_grasp = self.action_type) 
 
-                    #estimate actions
-                    action_est, normalised_action_est, state = self.get_action_from_network(in_depth_img, in_yaw_state)
+                    #get state
+                    state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
+                                               torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
+
+                    #estimate actions by network
+                    action_est, normalised_action_est = self.get_action_from_network(state)
 
                     #action from demo
                     if expert_mode:
                         move = np.array(demo_low_level_actions[i])
-                        action_demo, gripper_action_demo = np.array(move[0:self.N_action]), np.argmax(np.array(move[-2:]))
-                        gripper_action_demo    = torch.FloatTensor([gripper_action_demo]).unsqueeze(0).to(self.device)
-                        action_demo            = torch.FloatTensor(action_demo).unsqueeze(0).to(self.device)
-
-                        if self.is_debug:
-                            print("[SUCCESS] estimate actions from guidance") 
-
-                        if self.action_type == constants.GRASP:
-                            normalised_action_demo = action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
-                        else:
-                            normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
-
-                        action, normalised_action = action_demo, normalised_action_demo
-
-                        if self.is_debug:
-                            print("[SUCCESS] normalise guidance action") 
+                        action, normalised_action = self.get_action_from_demo(move)
                     else:
-                        # action, normalised_action, gripper_action =  action_est, normalised_action_est, gripper_action_est
                         action, normalised_action = action_est, normalised_action_est
-
 
                     #compute action state and current q value
                     if self.action_type == constants.GRASP:
@@ -682,37 +668,23 @@ class Agent():
                     else:
                         action_done = False                       
 
-                    #get next state (no use in demo gathering)
-                    next_in_depth_img, next_in_gripper_state, next_in_yaw_state = self.preprocess_state(depth_img     = next_depth_img, 
-                                                                                                        gripper_state = next_gripper_state, 
-                                                                                                        yaw_ang       = next_yaw_state, 
-                                                                                                        is_grasp      = self.action_type)     
+                    #get next state 
+                    next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
+                                                                                    gripper_state = next_gripper_state, 
+                                                                                    yaw_ang = next_yaw_state, 
+                                                                                    is_grasp = self.action_type)     
+
+                    #get next state
+                    next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
+                                                    torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
 
                     #estimate next actions
-                    next_action_est, next_normalised_action_est, next_state = self.get_action_from_network(next_in_depth_img, next_in_yaw_state)
+                    next_action_est, next_normalised_action_est = self.get_action_from_network(next_state)
 
-                    if expert_mode:
-
-                        #action from demo
+                    if expert_mode:                        
                         n_move = np.array(demo_low_level_actions[i+1] if i+1 < len(demo_low_level_actions) else [0,0,0,0,move[-2],move[-1]])
-                        next_action_demo, next_gripper_action_demo = np.array(n_move[0:self.N_action]), np.argmax(np.array(n_move[-2:]))
-                        next_gripper_action_demo = torch.FloatTensor([next_gripper_action_demo]).unsqueeze(0).to(self.device)
-                        next_action_demo = torch.FloatTensor(next_action_demo).unsqueeze(0).to(self.device)
-
-                        if self.is_debug:
-                            print("[SUCCESS] estimate next actions from guidance")
-
-                        if self.action_type == constants.GRASP:
-                            next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
-                        else:
-                            next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
-
-                        next_action, next_normalised_action, next_gripper_action = next_action_demo, next_normalised_action_demo, next_gripper_action_demo    
-
-                        if self.is_debug:
-                            print("[SUCCESS] normalise next actions from guidance")                        
+                        next_action, next_normalised_action = self.get_action_from_demo(n_move)
                     else:
-                        # next_action, next_normalised_action, next_gripper_action = next_action_est, next_normalised_action_est, next_gripper_action_est
                         next_action, next_normalised_action = next_action_est, next_normalised_action_est
 
 
