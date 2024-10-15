@@ -465,6 +465,27 @@ class Agent():
 
         return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions
 
+    def get_action_from_network(self, depth_img, yaw_state):
+
+        #get state
+        state = torch.concatenate([torch.FloatTensor(depth_img).unsqueeze(0), 
+                                   torch.FloatTensor([yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
+
+        #estimate action
+        if self.action_type == constants.GRASP:
+            self.grasp_actor.eval()
+            with torch.no_grad():
+                action, normalised_action, _, _ = self.grasp_actor.get_actions(state)
+        else:
+            self.push_actor.eval()
+            with torch.no_grad():
+                action, normalised_action, _, _ = self.push_actor.get_actions(state)
+
+        if self.is_debug:
+            print("[SUCCESS] estimate actions from network") 
+
+        return action, normalised_action, state
+
     def is_expert_mode(self, demo_low_level_actions):
 
         #decide if it should enter demo mode
@@ -569,28 +590,8 @@ class Agent():
                                                                                          yaw_ang       = yaw_state, 
                                                                                          is_grasp      = self.action_type) 
 
-                    if self.is_debug:
-                        print("[SUCCESS] preprocess raw data")
-
                     #estimate actions
-                    if self.action_type == constants.GRASP:
-                        #estimate action from network
-                        self.grasp_actor.eval()
-                        with torch.no_grad():
-                            state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
-                                                       torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-
-                            action_est, normalised_action_est, _, _ = self.grasp_actor.get_actions(state)
-                    else:
-                        #estimate action from network
-                        self.push_actor.eval()
-                        with torch.no_grad():
-                            state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
-                                                       torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-                            action_est, normalised_action_est, _, _ = self.push_actor.get_actions(state)
-
-                    if self.is_debug:
-                        print("[SUCCESS] estimate actions from network") 
+                    action_est, normalised_action_est, state = self.get_action_from_network(in_depth_img, in_yaw_state)
 
                     #action from demo
                     if expert_mode:
@@ -687,29 +688,8 @@ class Agent():
                                                                                                         yaw_ang       = next_yaw_state, 
                                                                                                         is_grasp      = self.action_type)     
 
-                    if self.is_debug:
-                        print("[SUCCESS] preprocess next raw data")
-
-                    if self.action_type == constants.GRASP:
-                        #estimate action from network
-                        self.grasp_actor.eval()
-                        with torch.no_grad():
-
-                            next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
-                                                            torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-                            next_action_est, next_normalised_action_est, _, _ = self.grasp_actor.get_actions(next_state)
-                            
-                    else:
-                        #estimate action from network
-                        self.push_actor.eval()
-                        with torch.no_grad():
-                            next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
-                                                           torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-
-                            next_action_est, next_normalised_action_est, _, _ = self.push_actor.get_actions(next_state)            
-
-                    if self.is_debug:
-                        print("[SUCCESS] estimate next actions from network")
+                    #estimate next actions
+                    next_action_est, next_normalised_action_est, next_state = self.get_action_from_network(next_in_depth_img, next_in_yaw_state)
 
                     if expert_mode:
 
