@@ -225,8 +225,6 @@ class Agent():
         self.grasp_fail_counter = 0
         self.push_fail_counter = 0
 
-
-
     def preprocess_state(self, depth_img, gripper_state, yaw_ang, is_grasp = True):
         
         #TODO [FINISH 29 AUG 2024]: yaw angle and gripper should not turn into image size in this stage
@@ -358,11 +356,27 @@ class Agent():
             print(f"[PUSH REWARD SUM] push_reward_sum: {push_reward_sum}/{self.best_push_reward_sum}")        
             self.push_reward_sum_hist.append(push_reward_sum)
 
-    def interact(self,
-                 max_episode   = 1,
-                 hld_mode      = constants.HLD_MODE,
-                 is_eval       = False):
+    def reset_episode(self):
+        #initialise episode data
+        self.N_action_taken = 0
+        self.episode_done = False
+        self.action_type = None
+        self.is_success_grasp = False
+        self.grasp_counter = 0
+        self.grasp_success_counter = 0
+        self.grasp_fail_counter = 0
+        self.push_fail_counter = 0
 
+        #reset environment
+        self.env.reset(reset_item = True)
+        self.is_env_reset = True
+
+        #init hld experience
+        self.init_hld_exp()
+
+    def init_interact(self, is_eval, hld_mode):
+
+        #set evaluation mode and hld mode
         if is_eval:
             self.is_eval       = is_eval
             self.is_full_train = False
@@ -380,12 +394,8 @@ class Agent():
             self.buffer_replay_hld    = BufferReplay_HLD(max_memory_size = int(self.max_memory_size_hld))
             print("[SUCCESS] initialise memory buffer")
 
-
-        #start trainiing/evaluation loop
-        episode = 0
-
+        #load agent data
         try:
-            #load agent data
             self.load_agent_data()
             print("[SUCCESS] load agent data") 
         except:
@@ -393,26 +403,23 @@ class Agent():
 
         self.load_models()
 
+    def interact(self,
+                 max_episode   = 1,
+                 hld_mode      = constants.HLD_MODE,
+                 is_eval       = False):
+
+
+        #init interact
+        self.init_interact()
+
+        #start trainiing/evaluation loop
+        episode = 0
+
         while episode <  max_episode:
 
-            #initialise episode data
-            N_action_taken          = 0
-            episode_done            = False
-            action_type             = None
-            is_success_grasp        = False
-            grasp_counter           = 0
-            grasp_success_counter   = 0
-            self.grasp_fail_counter = 0
-            self.push_fail_counter  = 0
+            self.reset_episode()
 
-            #reset environment
-            self.env.reset(reset_item = True)
-            is_env_reset = True
-
-            #init hld experience
-            self.init_hld_exp()
-
-            while not episode_done and N_action_taken < self.max_action_taken:
+            while not self.episode_done and self.N_action_taken < self.max_action_taken:
 
                 print(f"==== episode: {episode} ====")
 
@@ -439,30 +446,30 @@ class Agent():
                     #make high-level decision
                     self.hld_net.eval()
                     with torch.no_grad():
-                        hld_q_values, action_type = self.hld_net.make_decisions(hld_state)
+                        hld_q_values, self.action_type = self.hld_net.make_decisions(hld_state)
                 elif self.hld_mode == constants.GRASP_ONLY:
-                    action_type = constants.GRASP
+                    self.action_type = constants.GRASP
                 elif self.hld_mode == constants.SEQ_GRASP_PUSH:
-                    if action_type is None or action_type == constants.PUSH:
-                        action_type = constants.GRASP
-                    elif action_type == constants.GRASP:
-                        action_type = constants.PUSH
+                    if self.action_type is None or self.action_type == constants.PUSH:
+                        self.action_type = constants.GRASP
+                    elif self.action_type == constants.GRASP:
+                        self.action_type = constants.PUSH
 
                 #demo action generation
                 delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
 
                 if self.is_full_train or self.is_eval:
-                    if action_type == constants.GRASP:
+                    if self.action_type == constants.GRASP:
                         delta_moves = delta_moves_grasp
-                    elif action_type == constants.PUSH:
+                    elif self.action_type == constants.PUSH:
                         delta_moves = delta_moves_push
                 else:
                     if len(delta_moves_grasp) > 0:
                         delta_moves = delta_moves_grasp
-                        action_type = constants.GRASP
+                        self.action_type = constants.GRASP
                     else:
                         delta_moves = delta_moves_push
-                        action_type = constants.PUSH
+                        self.action_type = constants.PUSH
 
                 #decide if it should enter demo mode
                 if not self.is_eval and not self.is_full_train and \
@@ -471,7 +478,7 @@ class Agent():
                     expert_mode    = True
                     self.enable_bc = True 
                     buffer_replay  = self.buffer_replay_expert                       
-                elif not self.is_eval and action_type == constants.PUSH and self.push_fail_counter >= 1:
+                elif not self.is_eval and self.action_type == constants.PUSH and self.push_fail_counter >= 1:
                     if self.is_full_train: 
                         if len(delta_moves) > 0:
                             expert_mode = True
@@ -484,7 +491,7 @@ class Agent():
                         buffer_replay = self.buffer_replay_expert
 
                     self.push_fail_counter = 0
-                elif not self.is_eval and action_type == constants.GRASP and self.grasp_fail_counter >= 1:
+                elif not self.is_eval and self.action_type == constants.GRASP and self.grasp_fail_counter >= 1:
 
                     if self.is_full_train:
                         if len(delta_moves) > 0:
@@ -512,13 +519,13 @@ class Agent():
                         self.enable_rl_actor  = False
 
                 #decide N_step
-                if action_type == constants.GRASP:
+                if self.action_type == constants.GRASP:
                     N_step_low_level = len(delta_moves) if expert_mode else self.N_grasp_step
                 else:
                     N_step_low_level = len(delta_moves) if expert_mode else self.N_push_step
 
                 if self.env.N_pickable_item <= 0:
-                    episode_done = True
+                    self.episode_done = True
                     continue
                 
                 print(f"N_step_low_level: {N_step_low_level}")
@@ -537,7 +544,7 @@ class Agent():
                     print(f"==== low level action step: {i} N_pickable_item: {self.env.N_pickable_item} ====")
 
                     #get raw data
-                    depth_img, gripper_state, yaw_state = self.env.get_raw_data(action_type)
+                    depth_img, gripper_state, yaw_state = self.env.get_raw_data(self.action_type)
 
                     if self.is_debug:
                         print("[SUCCESS] get raw data")
@@ -546,13 +553,13 @@ class Agent():
                     in_depth_img, in_gripper_state, in_yaw_state = self.preprocess_state(depth_img     = depth_img, 
                                                                                          gripper_state = gripper_state, 
                                                                                          yaw_ang       = yaw_state, 
-                                                                                         is_grasp      = action_type) 
+                                                                                         is_grasp      = self.action_type) 
 
                     if self.is_debug:
                         print("[SUCCESS] preprocess raw data")
 
                     #estimate actions
-                    if action_type == constants.GRASP:
+                    if self.action_type == constants.GRASP:
                         #estimate action from network
                         self.grasp_actor.eval()
                         with torch.no_grad():
@@ -581,7 +588,7 @@ class Agent():
                         if self.is_debug:
                             print("[SUCCESS] estimate actions from guidance") 
 
-                        if action_type == constants.GRASP:
+                        if self.action_type == constants.GRASP:
                             normalised_action_demo = action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
                         else:
                             normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
@@ -596,7 +603,7 @@ class Agent():
 
 
                     #compute action state and current q value
-                    if action_type == constants.GRASP:
+                    if self.action_type == constants.GRASP:
                         self.grasp_critic1.eval()
                         self.grasp_critic2.eval()
                         with torch.no_grad():
@@ -628,7 +635,7 @@ class Agent():
 
                     #interact with env
 
-                    reward, is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(action_type, 
+                    reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(self.action_type, 
                                                                                                                                               action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
                                                                                                                                               action.to(torch.device('cpu')).detach().numpy()[0][3], 
                                                                                                                                               None)
@@ -642,15 +649,15 @@ class Agent():
                         is_sim_abnormal = True
 
                     #print actions
-                    print(f"[ACTION TYPE]: {action_type}")  
+                    print(f"[ACTION TYPE]: {self.action_type}")  
                     move_msg  = f"[MOVE] xyz: {action.to(torch.device('cpu')).detach().numpy()[0][0:3]}"
                     move_msg += f" yaw: {np.rad2deg(action.to(torch.device('cpu')).detach().numpy()[0][3])}"
                     print(move_msg)
 
                     #check if all items are picked
-                    episode_done = False if self.env.N_pickable_item > 0 else True
+                    self.episode_done = False if self.env.N_pickable_item > 0 else True
                     if (i == N_step_low_level - 1 or 
-                        is_success_grasp or
+                        self.is_success_grasp or
                         self.env.is_out_of_working_space or 
                         not self.env.can_execute_action or 
                         self.env.is_collision_to_ground or
@@ -664,12 +671,12 @@ class Agent():
                     next_in_depth_img, next_in_gripper_state, next_in_yaw_state = self.preprocess_state(depth_img     = next_depth_img, 
                                                                                                         gripper_state = next_gripper_state, 
                                                                                                         yaw_ang       = next_yaw_state, 
-                                                                                                        is_grasp      = action_type)     
+                                                                                                        is_grasp      = self.action_type)     
 
                     if self.is_debug:
                         print("[SUCCESS] preprocess next raw data")
 
-                    if action_type == constants.GRASP:
+                    if self.action_type == constants.GRASP:
                         #estimate action from network
                         self.grasp_actor.eval()
                         with torch.no_grad():
@@ -701,7 +708,7 @@ class Agent():
                         if self.is_debug:
                             print("[SUCCESS] estimate next actions from guidance")
 
-                        if action_type == constants.GRASP:
+                        if self.action_type == constants.GRASP:
                             next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.MAX_ACTION).view(1, len(constants.MAX_ACTION)).to(self.device)
                         else:
                             next_normalised_action_demo = next_action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
@@ -716,7 +723,7 @@ class Agent():
 
 
                     #compute next action state and next q value
-                    if action_type == constants.GRASP:
+                    if self.action_type == constants.GRASP:
                         self.grasp_critic1_target.eval()
                         self.grasp_critic2_target.eval()
 
@@ -778,7 +785,7 @@ class Agent():
                     self.next_actions.append(next_action.to(torch.device('cpu')).detach().numpy()[0])
                     self.next_gripper_actions.append(None)       
 
-                    self.action_types.append(action_type)
+                    self.action_types.append(self.action_type)
 
                     self.rewards.append(reward)
                     self.action_dones.append(action_done)
@@ -790,13 +797,13 @@ class Agent():
                         print("[SUCCESS] append transition experience")
 
                     #check if episode_done
-                    if episode_done:
+                    if self.episode_done:
                         print("[SUCCESS] finish one episode")      
                         break 
                     elif action_done:
 
-                        if  is_success_grasp or i == N_step_low_level - 1 or is_push:
-                            if is_success_grasp:
+                        if self.is_success_grasp or i == N_step_low_level - 1 or is_push:
+                            if self.is_success_grasp:
                                 print("[SUCCESS] grasp an item")
                             elif is_push:
                                 print("[SUCCESS] perform push action")
@@ -829,18 +836,18 @@ class Agent():
                             else:
                                 self.env.reset(reset_item = False)
 
-                            is_env_reset = True
+                            self.is_env_reset = True
                             print("[WARN] stop executing this action!")
                         
                         break
                 
                 print("=== end of action ===")
                 #update number of action taken
-                N_action_taken += 1
+                self.N_action_taken += 1
 
                 #return home
-                self.env.return_home(is_env_reset, action_type)
-                is_env_reset = False
+                self.env.return_home(self.is_env_reset, self.action_type)
+                self.is_env_reset = False
 
                 if self.is_debug:
                     print("[SUCCESS] return home")
@@ -871,13 +878,13 @@ class Agent():
                 if not is_sim_abnormal and not expert_mode:
 
                     #record success rate of low-level actions network
-                    self.record_success_rate(action_type, self.rewards, delta_moves_grasp, delta_moves_push)
+                    self.record_success_rate(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
 
                     #record grasping efficiency
-                    if action_type == constants.GRASP:
-                        grasp_counter += 1
+                    if self.action_type == constants.GRASP:
+                        self.grasp_counter += 1
                         if np.max(self.rewards) > 0:
-                            grasp_success_counter += 1
+                            self.grasp_success_counter += 1
 
                     #check if we should change to full training mode
                     if not self.is_eval:
@@ -913,19 +920,19 @@ class Agent():
                     if self.is_debug:
                         print('[SUCCESS] store transition experience for low-level action')   
 
-                    self.online_update(action_type = action_type)
+                    self.online_update(action_type = self.action_type)
 
                     if self.is_debug:
                         print('[SUCCESS] online update')
 
                     #save low-level network model
-                    self.save_models(action_type, episode_done, expert_mode)
+                    self.save_models(self.action_type, self.episode_done, expert_mode)
 
                     if self.is_full_train:
                         
                         if not is_sim_abnormal:
 
-                            hld_reward = self.env.reward_hld(action_type, self.rewards, delta_moves_grasp, delta_moves_push)
+                            hld_reward = self.env.reward_hld(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
 
                             #get raw data
                             _, next_hld_depth_img = self.env.get_rgbd_data()
@@ -945,16 +952,16 @@ class Agent():
                                 next_hld_q_value, _ = self.hld_net_target.make_decisions(next_hld_state, take_max = True)
                                 next_hld_q_value = next_hld_q_value[0][next_action_type]
 
-                                target_hld_q_values = hld_reward + (1. - episode_done)*self.gamma*next_hld_q_value
+                                target_hld_q_values = hld_reward + (1. - self.episode_done)*self.gamma*next_hld_q_value
 
-                                current_hld_q = hld_q_values[0][action_type]
+                                current_hld_q = hld_q_values[0][self.action_type]
                                 hld_critic_loss = nn.MSELoss()(current_hld_q, target_hld_q_values).to(torch.device('cpu')).detach().numpy()
 
                                 print(f"[HLD reward] r: {hld_reward}")
-                                print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][action_type]}, next q: {target_hld_q_values}, action type: {action_type} next action type: {next_action_type}")
+                                print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][self.action_type]}, target q: {target_hld_q_values}, action type: {self.action_type} next action type: {next_action_type}")
                                 print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
 
-                            self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, episode_done, hld_critic_loss)
+                            self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, self.episode_done, hld_critic_loss)
 
                             self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
                                                                     self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_loss[-1])
@@ -979,8 +986,8 @@ class Agent():
                 else:
                     self.CR_eval[self.eval_index] = 0
 
-                self.AGS_eval[self.eval_index] = grasp_success_counter/grasp_counter
-                self.ATC_eval[self.eval_index] = N_action_taken
+                self.AGS_eval[self.eval_index] = self.grasp_success_counter/self.grasp_counter
+                self.ATC_eval[self.eval_index] = self.N_action_taken
 
                 #update hld record index
                 self.eval_index += 1
@@ -996,7 +1003,7 @@ class Agent():
                 else:
                     self.hld_record_list[self.hld_record_index] = 0
 
-                self.hld_step_list[self.hld_record_index] = N_action_taken
+                self.hld_step_list[self.hld_record_index] = self.N_action_taken
 
                 #update hld record index
                 self.hld_record_index += 1
@@ -1047,11 +1054,6 @@ class Agent():
             #compute state and state action
             if action_type == constants.GRASP:
                 
-                # state = torch.concatenate([torch.FloatTensor(depth_state).unsqueeze(0), 
-                #                            torch.FloatTensor([gripper_state]).expand(128, 128).unsqueeze(0), 
-                #                            torch.FloatTensor([yaw_state]).expand(128, 128).unsqueeze(0)], 
-                #                            dim=0)
-                
                 state = torch.concatenate([torch.FloatTensor(depth_state).unsqueeze(0), 
                                            torch.FloatTensor([yaw_state]).expand(128, 128).unsqueeze(0)], 
                                            dim=0)
@@ -1063,15 +1065,7 @@ class Agent():
                                                     torch.FloatTensor([actions[i][1]/constants.MAX_ACTION[1]]).expand(128, 128).unsqueeze(0),
                                                     torch.FloatTensor([actions[i][2]/constants.MAX_ACTION[2]]).expand(128, 128).unsqueeze(0),
                                                     torch.FloatTensor([actions[i][3]/constants.MAX_ACTION[3]]).expand(128, 128).unsqueeze(0)],
-                                                    dim = 0)   
-
-                    # action_state = torch.concatenate([state, 
-                    #                                 torch.FloatTensor([actions[i][0]/constants.MAX_ACTION[0]]).expand(128, 128).unsqueeze(0),
-                    #                                 torch.FloatTensor([actions[i][1]/constants.MAX_ACTION[1]]).expand(128, 128).unsqueeze(0),
-                    #                                 torch.FloatTensor([actions[i][2]/constants.MAX_ACTION[2]]).expand(128, 128).unsqueeze(0),
-                    #                                 torch.FloatTensor([actions[i][3]/constants.MAX_ACTION[3]]).expand(128, 128).unsqueeze(0),
-                    #                                 torch.FloatTensor([gripper_actions[i]]).expand(128, 128).unsqueeze(0)],
-                    #                                 dim = 0)                
+                                                    dim = 0)                 
                                 
             else:
                 state = torch.concatenate([torch.FloatTensor(depth_state).unsqueeze(0), 
@@ -1469,10 +1463,6 @@ class Agent():
         bc_loss_no_reduce = nn.MSELoss(reduction = 'none')(normalised_actions_bc.float(), normalised_expert_actions.float())
         bc_loss_no_reduce = torch.mean(bc_loss_no_reduce, dim=1)
 
-        # if action_type == constants.GRASP:
-        #     ce_loss_no_reduce  = nn.CrossEntropyLoss(reduction = 'none')(gripper_action_probs_bc, expert_gripper_actions.long())*self.gripper_loss_weight
-        #     bc_loss_no_reduce += ce_loss_no_reduce
-
         bc_loss = torch.mean(bc_loss_no_reduce, dim = 0)
 
         return bc_loss, bc_loss_no_reduce
@@ -1505,15 +1495,6 @@ class Agent():
         for i in range(state_batch.shape[0]):
             
             if action_type == constants.GRASP:             
-                #compute action state
-                # action_state = torch.concatenate([state_batch[i], 
-                #                                  (normalised_actions[i][0]).expand(128, 128).unsqueeze(0),
-                #                                  (normalised_actions[i][1]).expand(128, 128).unsqueeze(0),
-                #                                  (normalised_actions[i][2]).expand(128, 128).unsqueeze(0),
-                #                                  (normalised_actions[i][3]).expand(128, 128).unsqueeze(0),
-                #                                  (gripper_actions[i]).expand(128, 128).unsqueeze(0)],
-                #                                   dim = 0)
-
                 action_state = torch.concatenate([state_batch[i], 
                                                  (normalised_actions[i][0]).expand(128, 128).unsqueeze(0),
                                                  (normalised_actions[i][1]).expand(128, 128).unsqueeze(0),
@@ -1590,9 +1571,6 @@ class Agent():
         if action_type == constants.GRASP:
             #save grasp network
             grasp_reward_sum = np.sum(self.grasp_reward_list)
-            # print(f"[GRASP REWARD SUM] grasp_reward_sum: {grasp_reward_sum}/{self.best_grasp_reward_sum}")
-            # if not expert_mode and (self.enable_rl_critic or self.enable_rl_actor or self.enable_bc):
-            #     self.grasp_reward_sum_hist.append(grasp_reward_sum)
             
             if not expert_mode and self.best_grasp_reward_sum < grasp_reward_sum:
                 self.best_grasp_reward_sum = grasp_reward_sum
