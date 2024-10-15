@@ -401,21 +401,51 @@ class Agent():
         except:
             print("[FAIL] load agent data") 
 
+        #load network model
         self.load_models()
+
+    def get_hld_decision(self):
+
+        if (self.is_full_train or self.is_eval) and self.hld_mode == constants.HLD_MODE:
+
+            #get raw data
+            _, hld_depth_img = self.env.get_rgbd_data()
+
+            #get current state
+            in_hld_depth_img, _, _ = self.preprocess_state(depth_img = hld_depth_img, 
+                                                           gripper_state = None, 
+                                                           yaw_ang = None)
+            
+            hld_state = torch.FloatTensor(in_hld_depth_img).unsqueeze(0).unsqueeze(0)
+
+            #make high-level decision
+            self.hld_net.eval()
+            with torch.no_grad():
+                hld_q_values, self.action_type = self.hld_net.make_decisions(hld_state)
+    
+        elif self.hld_mode == constants.GRASP_ONLY:
+            self.action_type = constants.GRASP
+        
+        elif self.hld_mode == constants.SEQ_GRASP_PUSH:
+            if self.action_type is None or self.action_type == constants.PUSH:
+                self.action_type = constants.GRASP
+            elif self.action_type == constants.GRASP:
+                self.action_type = constants.PUSH
+
+        return (hld_q_values self.hld_mode == constants.HLD_MODE else None)
 
     def interact(self,
                  max_episode   = 1,
                  hld_mode      = constants.HLD_MODE,
                  is_eval       = False):
 
-
-        #init interact
+        #initialise interact 
         self.init_interact()
 
         #start trainiing/evaluation loop
         episode = 0
 
-        while episode <  max_episode:
+        while episode < max_episode:
 
             self.reset_episode()
 
@@ -431,29 +461,8 @@ class Agent():
 
                 time.sleep(0.5) 
 
-                if (self.is_full_train or self.is_eval) and self.hld_mode == constants.HLD_MODE:
-
-                    #get raw data
-                    _, hld_depth_img = self.env.get_rgbd_data()
-
-                    #get state
-                    in_hld_depth_img, _, _ = self.preprocess_state(depth_img     = hld_depth_img, 
-                                                                   gripper_state = None, 
-                                                                   yaw_ang       = None)
-                    
-                    hld_state = torch.FloatTensor(in_hld_depth_img).unsqueeze(0).unsqueeze(0)
-
-                    #make high-level decision
-                    self.hld_net.eval()
-                    with torch.no_grad():
-                        hld_q_values, self.action_type = self.hld_net.make_decisions(hld_state)
-                elif self.hld_mode == constants.GRASP_ONLY:
-                    self.action_type = constants.GRASP
-                elif self.hld_mode == constants.SEQ_GRASP_PUSH:
-                    if self.action_type is None or self.action_type == constants.PUSH:
-                        self.action_type = constants.GRASP
-                    elif self.action_type == constants.GRASP:
-                        self.action_type = constants.PUSH
+                #get high - level decision (grasp or push)
+                hld_q_values = self.get_hld_decision()
 
                 #demo action generation
                 delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
