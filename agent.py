@@ -394,6 +394,16 @@ class Agent():
             self.buffer_replay_hld    = BufferReplay_HLD(max_memory_size = int(self.max_memory_size_hld))
             print("[SUCCESS] initialise memory buffer")
 
+        #set training mode
+        if self.is_eval:
+            self.enable_bc = False 
+            self.enable_rl_critic = False
+            self.enable_rl_actor = False
+        else:
+            self.enable_bc = True 
+            self.enable_rl_critic = False
+            self.enable_rl_actor = False
+
         #load agent data
         try:
             self.load_agent_data()
@@ -406,6 +416,10 @@ class Agent():
 
     def get_hld_decision(self):
 
+        #get demonstration action of pushing and grasping
+        delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
+
+        #determine the action type and demonstration action
         if (self.is_full_train or self.is_eval) and self.hld_mode == constants.HLD_MODE:
 
             #get raw data
@@ -422,17 +436,75 @@ class Agent():
             self.hld_net.eval()
             with torch.no_grad():
                 hld_q_values, self.action_type = self.hld_net.make_decisions(hld_state)
-    
-        elif self.hld_mode == constants.GRASP_ONLY:
-            self.action_type = constants.GRASP
-        
-        elif self.hld_mode == constants.SEQ_GRASP_PUSH:
-            if self.action_type is None or self.action_type == constants.PUSH:
+
+            #get demonstration movement
+            demo_low_level_actions = delta_moves_grasp if self.action_type == constants.GRASP else delta_moves_push
+
+        elif not self.is_full_train and not self.is_eval and self.hld_mode == constants.HLD_MODE:
+
+            if len(delta_moves_grasp) > 0:
+                demo_low_level_actions = delta_moves_grasp
                 self.action_type = constants.GRASP
-            elif self.action_type == constants.GRASP:
+            else:
+                demo_low_level_actions = delta_moves_push
                 self.action_type = constants.PUSH
 
-        return (hld_q_values self.hld_mode == constants.HLD_MODE else None)
+        elif self.is_eval and self.hld_mode == constants.GRASP_ONLY:
+
+            self.action_type = constants.GRASP
+            demo_low_level_actions = delta_moves_grasp
+
+        elif self.is_eval and self.hld_mode == constants.SEQ_GRASP_PUSH:
+
+            if self.action_type is None or self.action_type == constants.PUSH:
+                self.action_type = constants.GRASP
+                demo_low_level_actions = delta_moves_grasp
+            elif self.action_type == constants.GRASP:
+                self.action_type = constants.PUSH
+                demo_low_level_actions = delta_moves_push
+
+        return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions
+
+    def is_expert_mode(self, demo_low_level_actions):
+
+        #decide if it should enter demo mode
+        if not self.is_eval and \
+           not self.is_full_train and \
+          (self.buffer_replay_expert.grasp_data_size < self.N_batch * 5 or \
+           self.buffer_replay_expert.push_data_size  < self.N_batch * 5):
+            is_expert = True
+            buffer_replay = self.buffer_replay_expert                       
+        elif not self.is_eval and \
+            ((self.push_fail_counter >= 1 and self.action_type == constants.PUSH) or \
+             (self.grasp_fail_counter >= 1 and self.action_type == constants.GRASP)):
+
+            if self.is_full_train: 
+                if len(demo_low_level_actions) > 0:
+                    is_expert = True
+                    buffer_replay = self.buffer_replay_expert
+                else:
+                    is_expert = False
+                    buffer_replay = self.buffer_replay
+            else:
+                is_expert = True
+                buffer_replay = self.buffer_replay_expert
+
+            #reset fail counter
+            if self.action_type == constants.PUSH and self.push_fail_counter >= 1: 
+                self.push_fail_counter = 0
+            if self.action_type == constants.GRASP and self.grasp_fail_counter >= 1:
+                self.grasp_fail_counter = 0
+        else:
+            is_expert = False
+            buffer_replay = self.buffer_replay
+        
+        #decide N_step
+        if self.action_type == constants.GRASP:
+            N_step_low_level = len(demo_low_level_actions) if is_expert else self.N_grasp_step
+        else:
+            N_step_low_level = len(demo_low_level_actions) if is_expert else self.N_push_step
+
+        return is_expert, buffer_replay, N_step_low_level
 
     def interact(self,
                  max_episode   = 1,
@@ -440,7 +512,7 @@ class Agent():
                  is_eval       = False):
 
         #initialise interact 
-        self.init_interact()
+        self.init_interact(is_eval, hld_mode)
 
         #start trainiing/evaluation loop
         episode = 0
@@ -462,82 +534,15 @@ class Agent():
                 time.sleep(0.5) 
 
                 #get high - level decision (grasp or push)
-                hld_q_values = self.get_hld_decision()
-
-                #demo action generation
-                delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
-
-                if self.is_full_train or self.is_eval:
-                    if self.action_type == constants.GRASP:
-                        delta_moves = delta_moves_grasp
-                    elif self.action_type == constants.PUSH:
-                        delta_moves = delta_moves_push
-                else:
-                    if len(delta_moves_grasp) > 0:
-                        delta_moves = delta_moves_grasp
-                        self.action_type = constants.GRASP
-                    else:
-                        delta_moves = delta_moves_push
-                        self.action_type = constants.PUSH
+                hld_q_values, demo_low_level_actions  = self.get_hld_decision()
 
                 #decide if it should enter demo mode
-                if not self.is_eval and not self.is_full_train and \
-                    (self.buffer_replay_expert.grasp_data_size < self.N_batch * 5 or \
-                     self.buffer_replay_expert.push_data_size  < self.N_batch * 5):
-                    expert_mode    = True
-                    self.enable_bc = True 
-                    buffer_replay  = self.buffer_replay_expert                       
-                elif not self.is_eval and self.action_type == constants.PUSH and self.push_fail_counter >= 1:
-                    if self.is_full_train: 
-                        if len(delta_moves) > 0:
-                            expert_mode = True
-                            buffer_replay = self.buffer_replay_expert
-                        else:
-                            expert_mode = False
-                            buffer_replay = self.buffer_replay
-                    else:
-                        expert_mode = True
-                        buffer_replay = self.buffer_replay_expert
-
-                    self.push_fail_counter = 0
-                elif not self.is_eval and self.action_type == constants.GRASP and self.grasp_fail_counter >= 1:
-
-                    if self.is_full_train:
-                        if len(delta_moves) > 0:
-                            expert_mode = True
-                            buffer_replay = self.buffer_replay_expert
-                        else:
-                            expert_mode = False
-                            buffer_replay = self.buffer_replay
-                    else:
-                        expert_mode = True
-                        buffer_replay = self.buffer_replay_expert
-
-                    self.grasp_fail_counter = 0
-                else:
-                    expert_mode = False
-
-                    if self.is_eval:
-                        self.enable_bc        = False 
-                        self.enable_rl_critic = False
-                        self.enable_rl_actor  = False
-                    else:
-                        buffer_replay         = self.buffer_replay
-                        self.enable_bc        = True 
-                        self.enable_rl_critic = False
-                        self.enable_rl_actor  = False
-
-                #decide N_step
-                if self.action_type == constants.GRASP:
-                    N_step_low_level = len(delta_moves) if expert_mode else self.N_grasp_step
-                else:
-                    N_step_low_level = len(delta_moves) if expert_mode else self.N_push_step
+                expert_mode, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
+                print(f"N_step_low_level: {N_step_low_level}")
 
                 if self.env.N_pickable_item <= 0:
                     self.episode_done = True
                     continue
-                
-                print(f"N_step_low_level: {N_step_low_level}")
 
                 #initialise memory space for storing a complete set of actions
                 self.init_lla_exp()
@@ -589,7 +594,7 @@ class Agent():
 
                     #action from demo
                     if expert_mode:
-                        move = np.array(delta_moves[i])
+                        move = np.array(demo_low_level_actions[i])
                         action_demo, gripper_action_demo = np.array(move[0:self.N_action]), np.argmax(np.array(move[-2:]))
                         gripper_action_demo    = torch.FloatTensor([gripper_action_demo]).unsqueeze(0).to(self.device)
                         action_demo            = torch.FloatTensor(action_demo).unsqueeze(0).to(self.device)
@@ -709,7 +714,7 @@ class Agent():
                     if expert_mode:
 
                         #action from demo
-                        n_move = np.array(delta_moves[i+1] if i+1 < len(delta_moves) else [0,0,0,0,move[-2],move[-1]])
+                        n_move = np.array(demo_low_level_actions[i+1] if i+1 < len(demo_low_level_actions) else [0,0,0,0,move[-2],move[-1]])
                         next_action_demo, next_gripper_action_demo = np.array(n_move[0:self.N_action]), np.argmax(np.array(n_move[-2:]))
                         next_gripper_action_demo = torch.FloatTensor([next_gripper_action_demo]).unsqueeze(0).to(self.device)
                         next_action_demo = torch.FloatTensor(next_action_demo).unsqueeze(0).to(self.device)
