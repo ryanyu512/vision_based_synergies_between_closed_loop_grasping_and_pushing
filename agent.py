@@ -442,7 +442,7 @@ class Agent():
             self.hld_mode      = hld_mode
         else:
             self.is_eval       = is_eval
-            self.is_full_trian = False
+            self.is_full_train = False
             self.hld_mode      = constants.HLD_MODE
 
             #initialise buffer replay
@@ -466,6 +466,7 @@ class Agent():
         #load agent data
         try:
             self.load_agent_data()
+            self.is_transform_to_full_train()
             print("[SUCCESS] load agent data") 
         except:
             print("[FAIL] load agent data") 
@@ -522,7 +523,7 @@ class Agent():
                 self.action_type = constants.PUSH
                 demo_low_level_actions = delta_moves_push
 
-        return (hld_q_values if self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img
+        return (hld_q_values if (self.is_full_train or self.is_eval) and self.hld_mode == constants.HLD_MODE else None), demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img
 
     def get_action_from_network(self, state):
 
@@ -688,6 +689,8 @@ class Agent():
             print(f"[HLD CRITIC LOSS] q: {current_hld_q}, target q: {target_hld_q_values}, action type: {self.action_type} next action type: {next_action_type}")
             print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
 
+        return hld_critic_loss
+
     def is_reset_env(self, is_expert):
         #check if out of working space
         if self.env.is_out_of_working_space:
@@ -740,6 +743,7 @@ class Agent():
 
             if push_success_rate >= self.success_rate_threshold and grasp_success_rate >= self.success_rate_threshold:
                 self.is_full_train = True
+                print("[TRAIN MODE] TRANSFORM TO FULL TRAIN MODE")
 
     def compute_state_batch_and_state_action_batch(self, action_type, depth_states, gripper_states, yaw_states, actions = None, gripper_actions = None):
 
@@ -874,7 +878,7 @@ class Agent():
                                             0., 
                                             0.,
                                             True if (np.array(self.rewards) > 0).sum() > 0 else False,
-                                            self.actor_losses[i], self.critic_losses[i]) 
+                                            self.priorities[i]) 
         
         if self.is_debug:
             print('[SUCCESS] store transition experience for low-level action')   
@@ -896,9 +900,9 @@ class Agent():
                 #get raw data
                 _, next_hld_depth_img = self.env.get_rgbd_data()
 
-                in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img     = next_hld_depth_img, 
+                in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img = next_hld_depth_img, 
                                                                     gripper_state = None, 
-                                                                    yaw_ang       = None)
+                                                                    yaw_ang = None)
                 
                 next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
 
@@ -1390,14 +1394,14 @@ class Agent():
         
         #load hld-net
         try:
-            if self.is_full_train:
-                self.hld_net.load_checkpoint()
-                self.hld_net_target.load_checkpoint()
-                print("[LOAD MODEL] load hld-net check point")
-            elif self.is_eval:
+            if self.is_eval:
                 self.hld_net.load_checkpoint(True)
                 self.hld_net_target.load_checkpoint(True)
                 print("[LOAD MODEL] load hld-net best model")
+            else:
+                self.hld_net.load_checkpoint()
+                self.hld_net_target.load_checkpoint()
+                print("[LOAD MODEL] load hld-net check point")
 
             print("[SUCCESS] load hld-net model")
         except:
@@ -1668,7 +1672,7 @@ class Agent():
                             else:
                                 print("[SUCCESS] finish an action")
                                 
-                        self.is_reset_env()
+                        self.is_reset_env(is_expert)
                         
                         break
                 
@@ -1705,7 +1709,7 @@ class Agent():
 
                 if not self.is_eval:
                     #update low-level network
-                    self.update_low_level_network()
+                    self.update_low_level_network(is_expert, is_sim_abnormal)
 
                     #update high-level network
                     self.update_high_level_network(hld_depth_img, hld_q_values, is_sim_abnormal, delta_moves_grasp, delta_moves_push)

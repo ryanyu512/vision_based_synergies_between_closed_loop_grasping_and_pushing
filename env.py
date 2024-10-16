@@ -825,7 +825,7 @@ class Env():
             elif len(delta_moves_grasp) == 0 and len(delta_moves_push) > 0:
                 hld_reward =  0.5 #for correct push decision
 
-        if self.env.N_pickable_item <= 0:
+        if self.N_pickable_item <= 0:
             hld_reward += 5.0
 
         return hld_reward
