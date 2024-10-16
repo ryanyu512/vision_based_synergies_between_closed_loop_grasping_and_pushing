@@ -278,12 +278,12 @@ class Agent():
 
     def init_hld_exp(self):
         #initialise memory space for storing a complete set of actions
-        self.hld_depth_states      = []
-        self.hld_action_types      = [] 
-        self.hld_rewards           = []
+        self.hld_depth_states = []
+        self.hld_action_types = [] 
+        self.hld_rewards = []
         self.hld_next_depth_states = []
-        self.hld_dones             = []
-        self.hld_critic_loss       = []
+        self.hld_dones = []
+        self.hld_critic_losses = []
 
     def init_lla_exp(self):
 
@@ -369,6 +369,25 @@ class Agent():
             push_reward_sum = np.sum(self.push_reward_list)
             print(f"[PUSH REWARD SUM] push_reward_sum: {push_reward_sum}/{self.best_push_reward_sum}")        
             self.push_reward_sum_hist.append(push_reward_sum)
+
+    def record_evaluation_data(self):
+
+        if self.is_eval:
+            if self.env.N_pickable_item <= 0:
+                self.CR_eval[self.eval_index] = 1
+            else:
+                self.CR_eval[self.eval_index] = 0
+
+            self.AGS_eval[self.eval_index] = self.grasp_success_counter/self.grasp_counter
+            self.ATC_eval[self.eval_index] = self.N_action_taken
+
+            #update hld record index
+            self.eval_index += 1
+            if self.eval_index >= self.max_result_window_eval:
+                self.eval_index = 0
+
+            #save agent data
+            self.save_agent_data()
 
     def reset_episode(self):
         #initialise episode data
@@ -788,7 +807,7 @@ class Agent():
         if self.is_debug:
             print('[SUCCESS] online update')
 
-    def update_low_level_networks(self, is_expert, is_sim_abnormal):
+    def update_low_level_network(self, is_expert, is_sim_abnormal):
         
         #choose buffer replay
         buffer_replay = self.buffer_replay_expert if is_expert else self.buffer_replay
@@ -821,6 +840,36 @@ class Agent():
 
         #save low-level network model
         self.save_models(self.action_type, self.episode_done, is_expert)
+
+    def update_high_level_network(self, hld_depth_img, hld_q_values, is_sim_abnormal, delta_moves_grasp, delta_moves_push):
+
+        if self.is_full_train:
+            
+            if not is_sim_abnormal:
+
+                hld_reward = self.env.reward_hld(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
+
+                #get raw data
+                _, next_hld_depth_img = self.env.get_rgbd_data()
+
+                in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img     = next_hld_depth_img, 
+                                                                    gripper_state = None, 
+                                                                    yaw_ang       = None)
+                
+                next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
+
+                #compute priority
+                hld_critic_loss = self.compute_priority_hld(next_hld_state, hld_reward, hld_q_values[0][self.action_type])
+
+                #append hld experience
+                self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, self.episode_done, hld_critic_loss)
+
+                #store hld experience
+                self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
+                                                        self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_losses[-1])
+            
+            #update hld-net
+            self.online_update_hld()
 
     def online_update(self, action_type):
         
@@ -1622,7 +1671,6 @@ class Agent():
                 time.sleep(0.5) 
 
                 #store transition experience of low-level behaviour  
-
                 if (np.array(self.rewards) > 0).sum() > 0:
                     print("[SUCCESS] GRASP OR PUSH ACTION")
                 else:
@@ -1650,60 +1698,20 @@ class Agent():
 
                 if not self.is_eval:
                     
-                    #update low-level networks
-                    self.update_low_level_networks()
+                    #update low-level network
+                    self.update_low_level_network()
 
-                    if self.is_full_train:
-                        
-                        if not is_sim_abnormal:
-
-                            hld_reward = self.env.reward_hld(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
-
-                            #get raw data
-                            _, next_hld_depth_img = self.env.get_rgbd_data()
-
-                            in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img     = next_hld_depth_img, 
-                                                                                gripper_state = None, 
-                                                                                yaw_ang       = None)
-                            
-                            next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
-
-                            #compute priority
-                            hld_critic_loss = self.compute_priority_hld(next_hld_state, hld_reward, hld_q_values[0][self.action_type])
-
-                            #append hld experience
-                            self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, self.episode_done, hld_critic_loss)
-
-                            #store hld experience
-                            self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
-                                                                    self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_losses[-1])
-                        
-                        #update hld-net
-                        self.online_update_hld()
+                    #update high-level network
+                    self.update_high_level_network(hld_depth_img, hld_q_values, is_sim_abnormal, delta_moves_grasp, delta_moves_push)
 
                 #save agent data
                 self.save_agent_data()
 
             print("=== end of episode ===")
 
-            if self.is_eval:
-                if self.env.N_pickable_item <= 0:
-                    self.CR_eval[self.eval_index] = 1
-                else:
-                    self.CR_eval[self.eval_index] = 0
+            self.record_evaluation_data()
 
-                self.AGS_eval[self.eval_index] = self.grasp_success_counter/self.grasp_counter
-                self.ATC_eval[self.eval_index] = self.N_action_taken
-
-                #update hld record index
-                self.eval_index += 1
-                if self.eval_index >= self.max_result_window_eval:
-                    self.eval_index = 0
-
-                #save agent data
-                self.save_agent_data()
-
-            elif self.is_full_train:
+            if self.is_full_train:
                 if self.env.N_pickable_item <= 0:
                     self.hld_record_list[self.hld_record_index] = 1
                 else:
