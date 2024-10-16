@@ -311,8 +311,30 @@ class Agent():
         self.hld_dones.append(done)
         self.hld_critic_loss.append(critic_loss)
 
-    def append_lla_exp(self):
-        pass
+    def append_lla_exp(self, depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
+                       action, next_action, action_type, reward, action_done, priority):
+        
+        self.depth_states.append(depth_img)
+        self.gripper_states.append(gripper_state)
+        self.yaw_states.append(yaw_state)
+
+        self.next_depth_states.append(next_depth_img)
+        self.next_gripper_states.append(next_gripper_state)
+        self.next_yaw_states.append(next_yaw_state)
+
+        self.actions.append(action.to(torch.device('cpu')).detach().numpy()[0])
+        self.gripper_actions.append(None)
+        self.next_actions.append(next_action.to(torch.device('cpu')).detach().numpy()[0])
+        self.next_gripper_actions.append(None)       
+
+        self.action_types.append(action_type)
+        self.rewards.append(reward)
+        self.action_dones.append(action_done)
+
+        self.priorities.append(priority.to(torch.device('cpu')).detach().numpy())
+
+        if self.is_debug:
+            print("[SUCCESS] append transition experience")
 
     def record_success_rate(self, action_type, rewards, delta_moves_grasp, delta_moves_push):
         if  action_type == constants.GRASP:
@@ -486,6 +508,14 @@ class Agent():
             normalised_action_demo = action_demo/torch.FloatTensor(constants.PUSH_MAX_ACTION).view(1, len(constants.PUSH_MAX_ACTION)).to(self.device)
 
         return action_demo, normalised_action_demo
+
+    def is_action_done(self, step_low_level, N_step_low_level, is_push):
+        if (step_low_level == N_step_low_level - 1 or self.is_success_grasp or self.env.is_out_of_working_space or 
+            not self.env.can_execute_action or self.env.is_collision_to_ground or self.env.gripper_cannot_operate or 
+            is_push):
+            return True
+        else:
+            return False   
 
     def get_q_value_from_critic(self, action_state, is_compute_target = False):
 
@@ -697,18 +727,11 @@ class Agent():
                     move_msg += f" yaw: {np.rad2deg(action.to(torch.device('cpu')).detach().numpy()[0][3])}"
                     print(move_msg)
 
-                    #check if all items are picked
+                    #check if episode is done
                     self.episode_done = False if self.env.N_pickable_item > 0 else True
-                    if (i == N_step_low_level - 1 or 
-                        self.is_success_grasp or
-                        self.env.is_out_of_working_space or 
-                        not self.env.can_execute_action or 
-                        self.env.is_collision_to_ground or
-                        self.env.gripper_cannot_operate or 
-                        is_push):
-                        action_done = True
-                    else:
-                        action_done = False                       
+
+                    #check if action is done
+                    action_done = self.is_action_done(i, N_step_low_level, is_push)                    
 
                     #get next state 
                     next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
@@ -729,7 +752,6 @@ class Agent():
                     else:
                         next_action, next_normalised_action = next_action_est, next_normalised_action_est
 
-
                     #compute next action state
                     next_action_state = torch.concatenate([next_state[0], 
                                                         torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
@@ -746,28 +768,8 @@ class Agent():
                     priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, expert_mode, normalised_action_est, normalised_action)
 
                     # store experience during executing low-level action
-                    self.depth_states.append(depth_img)
-                    self.gripper_states.append(gripper_state)
-                    self.yaw_states.append(yaw_state)
-
-                    self.next_depth_states.append(next_depth_img)
-                    self.next_gripper_states.append(next_gripper_state)
-                    self.next_yaw_states.append(next_yaw_state)
-
-                    self.actions.append(action.to(torch.device('cpu')).detach().numpy()[0])
-                    self.gripper_actions.append(None)
-                    self.next_actions.append(next_action.to(torch.device('cpu')).detach().numpy()[0])
-                    self.next_gripper_actions.append(None)       
-
-                    self.action_types.append(self.action_type)
-
-                    self.rewards.append(reward)
-                    self.action_dones.append(action_done)
-
-                    self.priorities.append(priority.to(torch.device('cpu')).detach().numpy())
-
-                    if self.is_debug:
-                        print("[SUCCESS] append transition experience")
+                    self.append_lla_exp(depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
+                                        action, next_action, self.action_type, reward, action_done, priority)
 
                     #check if episode_done
                     if self.episode_done:
