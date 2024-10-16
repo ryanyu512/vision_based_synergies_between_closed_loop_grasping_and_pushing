@@ -138,7 +138,7 @@ class BufferReplay():
                          next_depth_state, next_gripper_state, 
                          next_yaw_state, done, 
                          predict_q, labeled_q, is_success, 
-                         actor_loss, critic_loss,
+                         priority,
                          is_save_to_dir = True):
 
         #update memory
@@ -154,10 +154,7 @@ class BufferReplay():
                 self.push_data_size -= 1
 
         #compute priority
-        if actor_loss is not None:
-            priority = np.abs(actor_loss + self.sm_c)**self.alpha
-        else:
-            priority = np.abs(critic_loss + self.sm_c)**self.alpha   
+        priority_ = np.abs(priority + self.sm_c)**self.alpha
 
         #plus action type data size
         if action_type == constants.GRASP:
@@ -185,7 +182,7 @@ class BufferReplay():
         self.predict_qs[self.memory_cntr]             = predict_q
         self.labeled_qs[self.memory_cntr]             = labeled_q
         self.success_mask[self.memory_cntr]           = is_success
-        self.priority[self.memory_cntr]               = priority
+        self.priority[self.memory_cntr]               = priority_
 
         if is_save_to_dir:
             data_dict = {
@@ -334,7 +331,6 @@ class BufferReplay():
 
             self.data_length += 1
 
- 
     def load_exp_from_dir(self, checkpt_dir = None):
 
         if checkpt_dir is None:

@@ -287,21 +287,20 @@ class Agent():
 
     def init_lla_exp(self):
 
-        self.depth_states           = []
-        self.gripper_states         = []
-        self.yaw_states             = []
-        self.actions                = []
-        self.gripper_actions        = []
-        self.next_actions           = []
-        self.next_gripper_actions   = []
-        self.action_types           = []
-        self.rewards                = []
-        self.next_depth_states      = []
-        self.next_gripper_states    = []
-        self.next_yaw_states        = []
-        self.action_dones           = []
-        self.actor_losses           = []
-        self.critic_losses          = []
+        self.depth_states = []
+        self.gripper_states = []
+        self.yaw_states = []
+        self.actions = []
+        self.gripper_actions = []
+        self.next_actions = []
+        self.next_gripper_actions = []
+        self.action_types = []
+        self.rewards = []
+        self.next_depth_states = []
+        self.next_gripper_states = []
+        self.next_yaw_states = []
+        self.action_dones = []
+        self.priorities = []
 
     def append_hld_exp(self, depth_state, action_type, reward, next_depth_state, done, critic_loss):
 
@@ -311,6 +310,9 @@ class Agent():
         self.hld_next_depth_states.append(next_depth_state)
         self.hld_dones.append(done)
         self.hld_critic_loss.append(critic_loss)
+
+    def append_lla_exp(self):
+        pass
 
     def record_success_rate(self, action_type, rewards, delta_moves_grasp, delta_moves_push):
         if  action_type == constants.GRASP:
@@ -565,6 +567,28 @@ class Agent():
 
         return is_expert, buffer_replay, N_step_low_level
 
+    def compute_priority(self, current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, action_est, action_target):
+        next_q   = torch.min(next_q1, next_q2)  
+        target_q = reward + (1 - action_done) * self.gamma * next_q
+        critic1_loss = nn.MSELoss()(current_q1, target_q)
+        critic2_loss = nn.MSELoss()(current_q2, target_q)
+        critic_loss  = (critic1_loss + critic2_loss)/2.
+
+        #compute bc loss
+        if is_expert:
+            bc_loss_no_reduce = nn.MSELoss(reduction = 'none')(action_est.float(), action_target.float())
+            bc_loss_no_reduce = torch.mean(bc_loss_no_reduce, dim=1)
+            actor_loss = torch.mean(bc_loss_no_reduce, dim = 0)
+            priority = actor_loss
+        else:
+            actor_loss = None
+            priority = critic_loss
+            
+        print(f"[LOSS] actor_loss: {actor_loss}, critic_loss: {critic_loss}")
+        print(f"[Q value] q1: {(target_q - current_q1)[0].item()}, q2: {(target_q - current_q2)[0].item()}, r: {reward}")
+
+        return priority
+
     def interact(self,
                  max_episode = 1,
                  hld_mode = constants.HLD_MODE,
@@ -714,26 +738,12 @@ class Agent():
                                                         torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
                                                         dim = 0).unsqueeze(0).to(self.device)        
 
-
+                    
                     #compute next q value
                     next_q1, next_q2 = self.get_q_value_from_critic(next_action_state, True)
 
-                    next_q   = torch.min(next_q1, next_q2)  
-                    target_q = reward + (1 - action_done) * self.gamma * next_q
-                    critic1_loss = nn.MSELoss()(current_q1, target_q)
-                    critic2_loss = nn.MSELoss()(current_q2, target_q)
-                    critic_loss  = (critic1_loss + critic2_loss)/2.
-
-                    #compute bc loss
-                    if expert_mode:
-                        bc_loss_no_reduce = nn.MSELoss(reduction = 'none')(normalised_action_est.float(), normalised_action.float())
-                        bc_loss_no_reduce = torch.mean(bc_loss_no_reduce, dim=1)
-                        actor_loss = torch.mean(bc_loss_no_reduce, dim = 0)
-                    else:
-                        actor_loss = None
-                        
-                    print(f"[LOSS] actor_loss: {actor_loss}, critic_loss: {critic_loss}")
-                    print(f"[Q value] q1: {(target_q - current_q1)[0].item()}, q2: {(target_q - current_q2)[0].item()}, r: {reward}")
+                    #compute priority for experience
+                    priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, expert_mode, normalised_action_est, normalised_action)
 
                     # store experience during executing low-level action
                     self.depth_states.append(depth_img)
@@ -754,8 +764,7 @@ class Agent():
                     self.rewards.append(reward)
                     self.action_dones.append(action_done)
 
-                    self.actor_losses.append(actor_loss.cpu() if expert_mode else None)
-                    self.critic_losses.append(critic_loss.to(torch.device('cpu')).detach().numpy())
+                    self.priorities.append(priority.to(torch.device('cpu')).detach().numpy())
 
                     if self.is_debug:
                         print("[SUCCESS] append transition experience")
