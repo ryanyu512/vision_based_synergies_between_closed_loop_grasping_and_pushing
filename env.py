@@ -853,15 +853,6 @@ class Env():
 
         self.gripper_cannot_operate = False
 
-        # if action_type == constants.GRASP:
-            # self.move(delta_pos = delta_pos, delta_ori = delta_ori)
-            # target = self.gripper_joint_open if is_open_gripper else self.gripper_joint_close
-            # self.open_close_gripper(is_open_gripper, target)
-        # elif action_type == constants.PUSH:
-            # self.move(delta_pos = delta_pos, delta_ori = delta_ori)
-            # target = self.gripper_joint_close
-            # self.open_close_gripper(is_open_gripper, target)
-
         #get gripper_tip_pos        
         gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
 
@@ -939,7 +930,15 @@ class Env():
                                                                        face_centers_items)
             self.item_data_dict['min_d'][i] = min_distance
 
-        return reward, is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_tip_pos[2]
+        is_sim_abnormal = False
+        if not self.can_execute_action and gripper_tip_pos[2] >= 0.1:
+            reward = 0.
+            print("[WARN] recorrect the reward")
+            print(f"[OVERALL REWARD] {reward}")
+            print(f"[GRIPPER TIP HEIGHT] {gripper_tip_pos[2]}")
+            is_sim_abnormal = True
+
+        return reward, is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal
     
     def return_home(self, is_env_reset, action_type = None):
 

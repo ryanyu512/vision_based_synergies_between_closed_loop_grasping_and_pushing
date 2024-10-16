@@ -370,6 +370,12 @@ class Agent():
             print(f"[PUSH REWARD SUM] push_reward_sum: {push_reward_sum}/{self.best_push_reward_sum}")        
             self.push_reward_sum_hist.append(push_reward_sum)
 
+    def record_grasp_attempt_data(self):
+        if self.action_type == constants.GRASP:
+            self.grasp_counter += 1
+            if np.max(self.rewards) > 0:
+                self.grasp_success_counter += 1
+
     def record_evaluation_data(self):
 
         if self.is_eval:
@@ -1601,18 +1607,10 @@ class Agent():
                     current_q1, current_q2 = self.get_q_value_from_critic(action_state, False)
                     
                     #interact with env
-                    reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(self.action_type, 
+                    reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal = self.env.step(self.action_type, 
                                                                                                                                               action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
                                                                                                                                               action.to(torch.device('cpu')).detach().numpy()[0][3], 
                                                                                                                                               None)
-                    
-                    is_sim_abnormal = False
-                    if not self.env.can_execute_action and gripper_hip_height >= 0.1:
-                        reward = 0.
-                        print("[WARN] recorrect the reward")
-                        print(f"[OVERALL REWARD] {reward}")
-                        print(f"[GRIPPER TIP HEIGHT] {gripper_hip_height}")
-                        is_sim_abnormal = True
 
                     #print actions
                     print(f"[ACTION TYPE]: {self.action_type}")  
@@ -1666,7 +1664,8 @@ class Agent():
 
                     #check if episode_done
                     if self.episode_done:
-                        print("[SUCCESS] finish one episode")      
+                        print("[SUCCESS] finish one episode")   
+
                         break 
                     elif action_done:
 
@@ -1708,10 +1707,7 @@ class Agent():
                     self.record_success_rate(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
 
                     #record grasping efficiency
-                    if self.action_type == constants.GRASP:
-                        self.grasp_counter += 1
-                        if np.max(self.rewards) > 0:
-                            self.grasp_success_counter += 1
+                    self.record_grasp_attempt_data()
 
                     #check if we should change to full training mode
                     self.is_transform_to_full_train()
