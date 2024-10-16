@@ -311,6 +311,9 @@ class Env():
         #update current pose
         self.item_data_dict['c_pose'] = self.update_item_pose()
 
+        if self.is_debug:
+            print("[SUCCESS] reset items if any")
+
     def randomise_obj_pose(self, xc, yc, xL, yL, margin = 0.0):
 
         #initialise item x, y

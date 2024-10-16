@@ -389,6 +389,26 @@ class Agent():
             #save agent data
             self.save_agent_data()
 
+    def record_hld_data(self):
+        if self.is_full_train:
+            if self.env.N_pickable_item <= 0:
+                self.hld_record_list[self.hld_record_index] = 1
+            else:
+                self.hld_record_list[self.hld_record_index] = 0
+
+            self.hld_step_list[self.hld_record_index] = self.N_action_taken
+
+            #update hld record index
+            self.hld_record_index += 1
+            if self.hld_record_index >= self.max_result_window:
+                self.hld_record_index = 0
+
+            #save hld-net model
+            self.save_models_hld()
+
+            #save agent data
+            self.save_agent_data()
+
     def reset_episode(self):
         #initialise episode data
         self.N_action_taken = 0
@@ -609,6 +629,8 @@ class Agent():
         else:
             N_step_low_level = len(demo_low_level_actions) if is_expert else self.N_push_step
 
+        print(f"N_step_low_level: {N_step_low_level}")
+
         return is_expert, N_step_low_level
 
     def compute_priority(self, current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, action_est, action_target):
@@ -696,6 +718,14 @@ class Agent():
                 print("[SUCCESS] update all hld-net experience priorities")
 
             print("[SUCCESS] update all experience priorities")
+
+    def is_transform_to_full_train(self):
+        if not self.is_eval:
+            push_success_rate  = np.sum(self.push_reward_list)/len(self.push_reward_list)
+            grasp_success_rate = np.sum(self.grasp_reward_list)/len(self.grasp_reward_list)
+
+            if push_success_rate >= self.success_rate_threshold and grasp_success_rate >= self.success_rate_threshold:
+                self.is_full_train = True
 
     def compute_state_batch_and_state_action_batch(self, action_type, depth_states, gripper_states, yaw_states, actions = None, gripper_actions = None):
 
@@ -1504,14 +1534,14 @@ class Agent():
 
             while not self.episode_done and self.N_action_taken < self.max_action_taken:
 
+                if self.env.N_pickable_item <= 0:
+                    self.episode_done = True
+                    continue
+
                 print(f"==== episode: {episode} ====")
 
                 #reset any items out of working space
                 self.env.reset_item2workingspace()    
-
-                if self.is_debug:
-                    print("[SUCCESS] reset items if any")
-
                 time.sleep(0.5) 
 
                 #get high - level decision (grasp or push)
@@ -1519,11 +1549,6 @@ class Agent():
 
                 #decide if it should enter demo mode
                 is_expert, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
-                print(f"N_step_low_level: {N_step_low_level}")
-
-                if self.env.N_pickable_item <= 0:
-                    self.episode_done = True
-                    continue
 
                 #initialise memory space for storing a complete set of actions
                 self.init_lla_exp()
@@ -1689,15 +1714,9 @@ class Agent():
                             self.grasp_success_counter += 1
 
                     #check if we should change to full training mode
-                    if not self.is_eval:
-                       push_success_rate  = np.sum(self.push_reward_list)/len(self.push_reward_list)
-                       grasp_success_rate = np.sum(self.grasp_reward_list)/len(self.grasp_reward_list)
-
-                       if push_success_rate >= self.success_rate_threshold and grasp_success_rate >= self.success_rate_threshold:
-                            self.is_full_train = True
+                    self.is_transform_to_full_train()
 
                 if not self.is_eval:
-                    
                     #update low-level network
                     self.update_low_level_network()
 
@@ -1709,26 +1728,11 @@ class Agent():
 
             print("=== end of episode ===")
 
+            #save evaluation data
             self.record_evaluation_data()
 
-            if self.is_full_train:
-                if self.env.N_pickable_item <= 0:
-                    self.hld_record_list[self.hld_record_index] = 1
-                else:
-                    self.hld_record_list[self.hld_record_index] = 0
-
-                self.hld_step_list[self.hld_record_index] = self.N_action_taken
-
-                #update hld record index
-                self.hld_record_index += 1
-                if self.hld_record_index >= self.max_result_window:
-                    self.hld_record_index = 0
-
-                #save hld-net model
-                self.save_models_hld()
-
-                #save agent data
-                self.save_agent_data()
+            #save hld data
+            self.record_hld_data()
 
             #check if save all experience to harddisk
             self.is_save_all_exp(episode, max_episode)
