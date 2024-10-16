@@ -564,7 +564,6 @@ class Agent():
           (self.buffer_replay_expert.grasp_data_size < self.N_batch * 5 or \
            self.buffer_replay_expert.push_data_size  < self.N_batch * 5):
             is_expert = True
-            buffer_replay = self.buffer_replay_expert                       
         elif not self.is_eval and \
             ((self.push_fail_counter >= 1 and self.action_type == constants.PUSH) or \
              (self.grasp_fail_counter >= 1 and self.action_type == constants.GRASP)):
@@ -572,13 +571,10 @@ class Agent():
             if self.is_full_train: 
                 if len(demo_low_level_actions) > 0:
                     is_expert = True
-                    buffer_replay = self.buffer_replay_expert
                 else:
                     is_expert = False
-                    buffer_replay = self.buffer_replay
             else:
                 is_expert = True
-                buffer_replay = self.buffer_replay_expert
 
             #reset fail counter
             if self.action_type == constants.PUSH and self.push_fail_counter >= 1: 
@@ -587,7 +583,6 @@ class Agent():
                 self.grasp_fail_counter = 0
         else:
             is_expert = False
-            buffer_replay = self.buffer_replay
         
         #decide N_step
         if self.action_type == constants.GRASP:
@@ -595,7 +590,7 @@ class Agent():
         else:
             N_step_low_level = len(demo_low_level_actions) if is_expert else self.N_push_step
 
-        return is_expert, buffer_replay, N_step_low_level
+        return is_expert, N_step_low_level
 
     def compute_priority(self, current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, action_est, action_target):
         next_q   = torch.min(next_q1, next_q2)  
@@ -792,6 +787,40 @@ class Agent():
 
         if self.is_debug:
             print('[SUCCESS] online update')
+
+    def update_low_level_networks(self, is_expert, is_sim_abnormal):
+        
+        #choose buffer replay
+        buffer_replay = self.buffer_replay_expert if is_expert else self.buffer_replay
+
+        for i in range(len(self.depth_states)): 
+            #only save successful experience when in expert mode
+            if (is_expert and (np.array(self.rewards) > 0).sum() <= 0) or is_sim_abnormal:
+                continue
+            
+            #skip storing experience when rl mode doesn't turn on at all
+            if not is_expert and (not self.enable_rl_actor and not self.enable_rl_critic):
+                continue
+
+            buffer_replay.store_transition(self.depth_states[i], self.gripper_states[i], self.yaw_states[i],
+                                            self.actions[i], self.gripper_actions[i], 
+                                            self.next_actions[i], self.next_gripper_actions[i],
+                                            self.action_types[i], self.rewards[i], 
+                                            self.next_depth_states[i], self.next_gripper_states[i], self.next_yaw_states[i],
+                                            self.action_dones[i], 
+                                            0., 
+                                            0.,
+                                            True if (np.array(self.rewards) > 0).sum() > 0 else False,
+                                            self.actor_losses[i], self.critic_losses[i]) 
+        
+        if self.is_debug:
+            print('[SUCCESS] store transition experience for low-level action')   
+
+        #update networks
+        self.online_update(action_type = self.action_type)
+
+        #save low-level network model
+        self.save_models(self.action_type, self.episode_done, is_expert)
 
     def online_update(self, action_type):
         
@@ -1440,7 +1469,7 @@ class Agent():
                 hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img = self.get_hld_decision()
 
                 #decide if it should enter demo mode
-                is_expert, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
+                is_expert, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
                 print(f"N_step_low_level: {N_step_low_level}")
 
                 if self.env.N_pickable_item <= 0:
@@ -1620,35 +1649,9 @@ class Agent():
                             self.is_full_train = True
 
                 if not self.is_eval:
-
-                    #save low-level action to buffer
-                    for ii in range(len(self.depth_states)): 
-                        #only save successful experience when in expert mode
-                        if (is_expert and (np.array(self.rewards) > 0).sum() <= 0) or is_sim_abnormal:
-                            continue
-                        
-                        #skip storing experience when rl mode doesn't turn on at all
-                        if not is_expert and (not self.enable_rl_actor and not self.enable_rl_critic):
-                            continue 
-
-                        buffer_replay.store_transition(self.depth_states[ii], self.gripper_states[ii], self.yaw_states[ii],
-                                                       self.actions[ii], self.gripper_actions[ii], 
-                                                       self.next_actions[ii], self.next_gripper_actions[ii],
-                                                       self.action_types[ii], self.rewards[ii], 
-                                                       self.next_depth_states[ii], self.next_gripper_states[ii], self.next_yaw_states[ii],
-                                                       self.action_dones[ii], 
-                                                       0., 
-                                                       0.,
-                                                       True if (np.array(self.rewards) > 0).sum() > 0 else False,
-                                                       self.actor_losses[ii], self.critic_losses[ii]) 
                     
-                    if self.is_debug:
-                        print('[SUCCESS] store transition experience for low-level action')   
-
-                    self.online_update(action_type = self.action_type)
-
-                    #save low-level network model
-                    self.save_models(self.action_type, self.episode_done, is_expert)
+                    #update low-level networks
+                    self.update_low_level_networks()
 
                     if self.is_full_train:
                         
