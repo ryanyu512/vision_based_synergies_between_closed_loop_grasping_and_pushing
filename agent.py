@@ -562,7 +562,15 @@ class Agent():
         else:
             return False   
 
-    def get_q_value_from_critic(self, action_state, is_compute_target = False):
+    def get_q_value_from_critic(self, state, normalised_action, is_compute_target = False):
+
+        #compute current action state
+        action_state = torch.concatenate([state, 
+                                          torch.FloatTensor([normalised_action[0]]).expand(128, 128).unsqueeze(0),
+                                          torch.FloatTensor([normalised_action[1]]).expand(128, 128).unsqueeze(0),
+                                          torch.FloatTensor([normalised_action[2]]).expand(128, 128).unsqueeze(0),
+                                          torch.FloatTensor([normalised_action[3]]).expand(128, 128).unsqueeze(0)],
+                                          dim = 0).unsqueeze(0).to(self.device)  
 
         #compute action state and current q value
         if self.action_type == constants.GRASP:
@@ -1594,17 +1602,9 @@ class Agent():
                         action, normalised_action = self.get_action_from_demo(move)
                     else:
                         action, normalised_action = action_est, normalised_action_est
-
-                    #compute current action state
-                    action_state = torch.concatenate([state[0], 
-                                                        torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                        dim = 0).unsqueeze(0).to(self.device)  
                     
                     #compute current q value
-                    current_q1, current_q2 = self.get_q_value_from_critic(action_state, False)
+                    current_q1, current_q2 = self.get_q_value_from_critic(state[0], normalised_action[0], False)
                     
                     #interact with env
                     reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal = self.env.step(self.action_type, 
@@ -1642,18 +1642,9 @@ class Agent():
                         next_action, next_normalised_action = self.get_action_from_demo(n_move)
                     else:
                         next_action, next_normalised_action = next_action_est, next_normalised_action_est
-
-                    #compute next action state
-                    next_action_state = torch.concatenate([next_state[0], 
-                                                        torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                        dim = 0).unsqueeze(0).to(self.device)        
-
                     
                     #compute next q value
-                    next_q1, next_q2 = self.get_q_value_from_critic(next_action_state, True)
+                    next_q1, next_q2 = self.get_q_value_from_critic(next_state[0], next_normalised_action[0], True)
 
                     #compute priority for experience
                     priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, normalised_action_est, normalised_action)
