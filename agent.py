@@ -619,394 +619,35 @@ class Agent():
 
         return priority
 
-    def interact(self,
-                 max_episode = 1,
-                 hld_mode = constants.HLD_MODE,
-                 is_eval = False):
-
-        #initialise interact 
-        self.init_interact(is_eval, hld_mode)
-
-        #initialise episode
-        episode = 0
-
-        while episode < max_episode:
-
-            self.reset_episode()
-
-            while not self.episode_done and self.N_action_taken < self.max_action_taken:
-
-                print(f"==== episode: {episode} ====")
-
-                #reset any items out of working space
-                self.env.reset_item2workingspace()    
-
-                if self.is_debug:
-                    print("[SUCCESS] reset items if any")
-
-                time.sleep(0.5) 
-
-                #get high - level decision (grasp or push)
-                hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img = self.get_hld_decision()
-
-                #decide if it should enter demo mode
-                expert_mode, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
-                print(f"N_step_low_level: {N_step_low_level}")
-
-                if self.env.N_pickable_item <= 0:
-                    self.episode_done = True
-                    continue
-
-                #initialise memory space for storing a complete set of actions
-                self.init_lla_exp()
-
-                for i in range(N_step_low_level):
-                    
-                    update_mode_msg = f"ENABLE BC: {self.enable_bc} ENABLE RL CRITIC: {self.enable_rl_critic} ENABLE RL ACTOR: {self.enable_rl_actor}"
-                    if expert_mode:
-                        print("==== EXPERT MODE " + update_mode_msg + " ====") 
-                    else:
-                        print("==== AGENT MODE " + update_mode_msg + " ====") 
-
-                    print(f"==== low level action step: {i} N_pickable_item: {self.env.N_pickable_item} ====")
-
-                    #get raw data
-                    depth_img, gripper_state, yaw_state = self.env.get_raw_data(self.action_type)
-
-                    if self.is_debug:
-                        print("[SUCCESS] get raw data")
-
-                    #preprocess raw data
-                    in_depth_img, _, in_yaw_state = self.preprocess_state(depth_img = depth_img, 
-                                                                          gripper_state = gripper_state, 
-                                                                          yaw_ang = yaw_state, 
-                                                                          is_grasp = self.action_type) 
-
-                    #get state
-                    state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
-                                               torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-
-                    #estimate actions by network
-                    action_est, normalised_action_est = self.get_action_from_network(state)
-
-                    #action from demo
-                    if expert_mode:
-                        move = np.array(demo_low_level_actions[i])
-                        action, normalised_action = self.get_action_from_demo(move)
-                    else:
-                        action, normalised_action = action_est, normalised_action_est
-
-                    #compute current action state
-                    action_state = torch.concatenate([state[0], 
-                                                        torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                        dim = 0).unsqueeze(0).to(self.device)  
-                    
-                    #compute current q value
-                    current_q1, current_q2 = self.get_q_value_from_critic(action_state, False)
-                    
-                    #interact with env
-                    reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(self.action_type, 
-                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
-                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][3], 
-                                                                                                                                              None)
-                    
-                    is_sim_abnormal = False
-                    if not self.env.can_execute_action and gripper_hip_height >= 0.1:
-                        reward = 0.
-                        print("[WARN] recorrect the reward")
-                        print(f"[OVERALL REWARD] {reward}")
-                        print(f"[GRIPPER TIP HEIGHT] {gripper_hip_height}")
-                        is_sim_abnormal = True
-
-                    #print actions
-                    print(f"[ACTION TYPE]: {self.action_type}")  
-                    move_msg  = f"[MOVE] xyz: {action.to(torch.device('cpu')).detach().numpy()[0][0:3]}"
-                    move_msg += f" yaw: {np.rad2deg(action.to(torch.device('cpu')).detach().numpy()[0][3])}"
-                    print(move_msg)
-
-                    #check if episode is done
-                    self.episode_done = False if self.env.N_pickable_item > 0 else True
-
-                    #check if action is done
-                    action_done = self.is_action_done(i, N_step_low_level, is_push)                    
-
-                    #get next state 
-                    next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
-                                                                                    gripper_state = next_gripper_state, 
-                                                                                    yaw_ang = next_yaw_state, 
-                                                                                    is_grasp = self.action_type)     
-
-                    #get next state
-                    next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
-                                                    torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
-
-                    #estimate next actions
-                    next_action_est, next_normalised_action_est = self.get_action_from_network(next_state)
-
-                    if expert_mode:                        
-                        n_move = np.array(demo_low_level_actions[i+1] if i+1 < len(demo_low_level_actions) else [0,0,0,0,move[-2],move[-1]])
-                        next_action, next_normalised_action = self.get_action_from_demo(n_move)
-                    else:
-                        next_action, next_normalised_action = next_action_est, next_normalised_action_est
-
-                    #compute next action state
-                    next_action_state = torch.concatenate([next_state[0], 
-                                                        torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
-                                                        torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
-                                                        dim = 0).unsqueeze(0).to(self.device)        
-
-                    
-                    #compute next q value
-                    next_q1, next_q2 = self.get_q_value_from_critic(next_action_state, True)
-
-                    #compute priority for experience
-                    priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, expert_mode, normalised_action_est, normalised_action)
-
-                    # store experience during executing low-level action
-                    self.append_lla_exp(depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
-                                        action, next_action, self.action_type, reward, action_done, priority)
-
-                    #check if episode_done
-                    if self.episode_done:
-                        print("[SUCCESS] finish one episode")      
-                        break 
-                    elif action_done:
-
-                        if self.is_success_grasp or i == N_step_low_level - 1 or is_push:
-                            if self.is_success_grasp:
-                                print("[SUCCESS] grasp an item")
-                            elif is_push:
-                                print("[SUCCESS] perform push action")
-                            else:
-                                print("[SUCCESS] finish an action")
-                                
-                        #check if out of working space
-                        if self.env.is_out_of_working_space:
-                            print("[WARN] out of working space")
-                        #check if action executable
-                        if not self.env.can_execute_action:
-                            print("[WARN] action is not executable")
-                        #check if collision to ground
-                        if self.env.is_collision_to_ground:
-                            print("[WARN] collision to ground")                        
-                        #check if the gripper can operate normally
-                        if self.env.gripper_cannot_operate:
-                            print("[WARN] gripper cannot function properly")                        
-
-                        #this set of motions is not executable => break it
-                        if (self.env.is_out_of_working_space or 
-                            not self.env.can_execute_action or 
-                            self.env.is_collision_to_ground or 
-                            self.env.gripper_cannot_operate):
-
-                            if expert_mode and not self.env.can_execute_action:
-                                #if expert mode's motion is not executable + agent fails => 
-                                #infinite loop => reset the items on the ground
-                                self.env.reset(reset_item = True)
-                            else:
-                                self.env.reset(reset_item = False)
-
-                            self.is_env_reset = True
-                            print("[WARN] stop executing this action!")
-                        
-                        break
-                
-                print("=== end of action ===")
-                #update number of action taken
-                self.N_action_taken += 1
-
-                #return home
-                self.env.return_home(self.is_env_reset, self.action_type)
-                self.is_env_reset = False
-
-                if self.is_debug:
-                    print("[SUCCESS] return home")
-
-                time.sleep(0.5) 
-
-                #store transition experience of low-level behaviour  
-                self.depth_states         = np.array(self.depth_states)
-                self.gripper_states       = np.array(self.gripper_states)
-                self.yaw_states           = np.array(self.yaw_states)
-                self.actions              = np.array(self.actions)
-                self.gripper_actions      = np.array(self.gripper_actions)
-                self.next_actions         = np.array(self.next_actions)
-                self.next_gripper_actions = np.array(self.next_gripper_actions)
-                self.action_types         = np.array(self.action_types)
-                self.rewards              = np.array(self.rewards)
-                self.next_depth_states    = np.array(self.next_depth_states)
-                self.action_dones         = np.array(self.action_dones)
-                self.actor_losses         = np.array(self.actor_losses)
-                self.critic_losses        = np.array(self.critic_losses)
-
-                if (self.rewards > 0).sum() > 0:
-                    print("[SUCCESS] GRASP OR PUSH ACTION")
-                else:
-                    print("[FAIL] GRASP OR PUSH ACTION")
-
-                #record success rate for low-level action network
-                if not is_sim_abnormal and not expert_mode:
-
-                    #record success rate of low-level actions network
-                    self.record_success_rate(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
-
-                    #record grasping efficiency
-                    if self.action_type == constants.GRASP:
-                        self.grasp_counter += 1
-                        if np.max(self.rewards) > 0:
-                            self.grasp_success_counter += 1
-
-                    #check if we should change to full training mode
-                    if not self.is_eval:
-                       push_success_rate  = np.sum(self.push_reward_list)/len(self.push_reward_list)
-                       grasp_success_rate = np.sum(self.grasp_reward_list)/len(self.grasp_reward_list)
-
-                       if push_success_rate >= self.success_rate_threshold and grasp_success_rate >= self.success_rate_threshold:
-                            self.is_full_train = True
-
-                if not self.is_eval:
-
-                    #save low-level action to buffer
-                    for ii in range(len(self.depth_states)): 
-                        #only save successful experience when in expert mode
-                        if (expert_mode and (self.rewards > 0).sum() <= 0) or is_sim_abnormal:
-                            continue
-                        
-                        #skip storing experience when rl mode doesn't turn on at all
-                        if not expert_mode and (not self.enable_rl_actor and not self.enable_rl_critic):
-                            continue 
-
-                        buffer_replay.store_transition(self.depth_states[ii], self.gripper_states[ii], self.yaw_states[ii],
-                                                       self.actions[ii], self.gripper_actions[ii], 
-                                                       self.next_actions[ii], self.next_gripper_actions[ii],
-                                                       self.action_types[ii], self.rewards[ii], 
-                                                       self.next_depth_states[ii], self.next_gripper_states[ii], self.next_yaw_states[ii],
-                                                       self.action_dones[ii], 
-                                                       0., 
-                                                       0.,
-                                                       True if (self.rewards > 0).sum() > 0 else False,
-                                                       self.actor_losses[ii], self.critic_losses[ii]) 
-                    
-                    if self.is_debug:
-                        print('[SUCCESS] store transition experience for low-level action')   
-
-                    self.online_update(action_type = self.action_type)
-
-                    if self.is_debug:
-                        print('[SUCCESS] online update')
-
-                    #save low-level network model
-                    self.save_models(self.action_type, self.episode_done, expert_mode)
-
-                    if self.is_full_train:
-                        
-                        if not is_sim_abnormal:
-
-                            hld_reward = self.env.reward_hld(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
-
-                            #get raw data
-                            _, next_hld_depth_img = self.env.get_rgbd_data()
-
-                            in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img     = next_hld_depth_img, 
-                                                                                gripper_state = None, 
-                                                                                yaw_ang       = None)
-                            
-                            next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
-
-                            #compute priority
-                            self.hld_net.eval()
-                            self.hld_net_target.eval()
-                            with torch.no_grad():
-                                _, next_action_type = self.hld_net.make_decisions(next_hld_state, take_max = True)
-
-                                next_hld_q_value, _ = self.hld_net_target.make_decisions(next_hld_state, take_max = True)
-                                next_hld_q_value = next_hld_q_value[0][next_action_type]
-
-                                target_hld_q_values = hld_reward + (1. - self.episode_done)*self.gamma*next_hld_q_value
-
-                                current_hld_q = hld_q_values[0][self.action_type]
-                                hld_critic_loss = nn.MSELoss()(current_hld_q, target_hld_q_values).to(torch.device('cpu')).detach().numpy()
-
-                                print(f"[HLD reward] r: {hld_reward}")
-                                print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][self.action_type]}, target q: {target_hld_q_values}, action type: {self.action_type} next action type: {next_action_type}")
-                                print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
-
-                            self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, self.episode_done, hld_critic_loss)
-
-                            self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
-                                                                    self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_loss[-1])
-                        
-                        #update hld-net
-                        self.online_update_hld()
-
-                        if self.is_debug:
-                            print('[SUCCESS] online update')
-
-                #save agent data
-                self.save_agent_data()
-
-                if self.is_debug:
-                    print("[SUCCESS] save agent data")
-
-            print("=== end of episode ===")
-
-            if self.is_eval:
-                if self.env.N_pickable_item <= 0:
-                    self.CR_eval[self.eval_index] = 1
-                else:
-                    self.CR_eval[self.eval_index] = 0
-
-                self.AGS_eval[self.eval_index] = self.grasp_success_counter/self.grasp_counter
-                self.ATC_eval[self.eval_index] = self.N_action_taken
-
-                #update hld record index
-                self.eval_index += 1
-                if self.eval_index >= self.max_result_window_eval:
-                    self.eval_index = 0
-
-                #save agent data
-                self.save_agent_data()
-
-            elif self.is_full_train:
-                if self.env.N_pickable_item <= 0:
-                    self.hld_record_list[self.hld_record_index] = 1
-                else:
-                    self.hld_record_list[self.hld_record_index] = 0
-
-                self.hld_step_list[self.hld_record_index] = self.N_action_taken
-
-                #update hld record index
-                self.hld_record_index += 1
-                if self.hld_record_index >= self.max_result_window:
-                    self.hld_record_index = 0
-
-                #save hld-net model
-                self.save_models_hld()
-
-                #save agent data
-                self.save_agent_data()
-                
-            if not self.is_eval and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
-                
-                if self.enable_bc:
-                    self.buffer_replay_expert.save_all_exp_to_dir()
-                    print("[SUCCESS] update all bc experience priorities")
-                if self.enable_rl_actor or self.enable_rl_critic:
-                    self.buffer_replay.save_all_exp_to_dir()
-                    print("[SUCCESS] update all rl experience priorities")
-                if self.is_full_train:
-                    self.buffer_replay_hld.save_all_exp_to_dir()
-                    print("[SUCCESS] update all hld-net experience priorities")
-
-                print("[SUCCESS] update all experience priorities")
-
-            #update episode
-            episode += 1
+    def is_reset_env(self, is_expert):
+        #check if out of working space
+        if self.env.is_out_of_working_space:
+            print("[WARN] out of working space")
+        #check if action executable
+        if not self.env.can_execute_action:
+            print("[WARN] action is not executable")
+        #check if collision to ground
+        if self.env.is_collision_to_ground:
+            print("[WARN] collision to ground")                        
+        #check if the gripper can operate normally
+        if self.env.gripper_cannot_operate:
+            print("[WARN] gripper cannot function properly")                        
+
+        #this set of motions is not executable => break it
+        if (self.env.is_out_of_working_space or 
+            not self.env.can_execute_action or 
+            self.env.is_collision_to_ground or 
+            self.env.gripper_cannot_operate):
+
+            if is_expert and not self.env.can_execute_action:
+                #if expert mode's motion is not executable + agent fails => 
+                #infinite loop => reset the items on the ground
+                self.env.reset(reset_item = True)
+            else:
+                self.env.reset(reset_item = False)
+
+            self.is_env_reset = True
+            print("[WARN] stop executing this action!")
 
     def compute_state_batch_and_state_action_batch(self, action_type, depth_states, gripper_states, yaw_states, actions = None, gripper_actions = None):
 
@@ -1727,3 +1368,365 @@ class Agent():
                 self.push_reward_sum_hist  = data_dict['push_reward_sum_hist']
                 self.hld_success_rate_hist = data_dict['hld_success_rate_hist']
                 self.hld_step_mean_hist    = data_dict['hld_step_mean_hist']
+
+    def interact(self,
+                 max_episode = 1,
+                 hld_mode = constants.HLD_MODE,
+                 is_eval = False):
+
+        #initialise interact 
+        self.init_interact(is_eval, hld_mode)
+
+        #initialise episode
+        episode = 0
+
+        while episode < max_episode:
+
+            self.reset_episode()
+
+            while not self.episode_done and self.N_action_taken < self.max_action_taken:
+
+                print(f"==== episode: {episode} ====")
+
+                #reset any items out of working space
+                self.env.reset_item2workingspace()    
+
+                if self.is_debug:
+                    print("[SUCCESS] reset items if any")
+
+                time.sleep(0.5) 
+
+                #get high - level decision (grasp or push)
+                hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img = self.get_hld_decision()
+
+                #decide if it should enter demo mode
+                expert_mode, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
+                print(f"N_step_low_level: {N_step_low_level}")
+
+                if self.env.N_pickable_item <= 0:
+                    self.episode_done = True
+                    continue
+
+                #initialise memory space for storing a complete set of actions
+                self.init_lla_exp()
+
+                for i in range(N_step_low_level):
+                    
+                    update_mode_msg = f"ENABLE BC: {self.enable_bc} ENABLE RL CRITIC: {self.enable_rl_critic} ENABLE RL ACTOR: {self.enable_rl_actor}"
+                    if expert_mode:
+                        print("==== EXPERT MODE " + update_mode_msg + " ====") 
+                    else:
+                        print("==== AGENT MODE " + update_mode_msg + " ====") 
+
+                    print(f"==== low level action step: {i} N_pickable_item: {self.env.N_pickable_item} ====")
+
+                    #get raw data
+                    depth_img, gripper_state, yaw_state = self.env.get_raw_data(self.action_type)
+
+                    if self.is_debug:
+                        print("[SUCCESS] get raw data")
+
+                    #preprocess raw data
+                    in_depth_img, _, in_yaw_state = self.preprocess_state(depth_img = depth_img, 
+                                                                          gripper_state = gripper_state, 
+                                                                          yaw_ang = yaw_state, 
+                                                                          is_grasp = self.action_type) 
+
+                    #get state
+                    state = torch.concatenate([torch.FloatTensor(in_depth_img).unsqueeze(0), 
+                                               torch.FloatTensor([in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
+
+                    #estimate actions by network
+                    action_est, normalised_action_est = self.get_action_from_network(state)
+
+                    #action from demo
+                    if expert_mode:
+                        move = np.array(demo_low_level_actions[i])
+                        action, normalised_action = self.get_action_from_demo(move)
+                    else:
+                        action, normalised_action = action_est, normalised_action_est
+
+                    #compute current action state
+                    action_state = torch.concatenate([state[0], 
+                                                        torch.FloatTensor([normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
+                                                        dim = 0).unsqueeze(0).to(self.device)  
+                    
+                    #compute current q value
+                    current_q1, current_q2 = self.get_q_value_from_critic(action_state, False)
+                    
+                    #interact with env
+                    reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, gripper_hip_height = self.env.step(self.action_type, 
+                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
+                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][3], 
+                                                                                                                                              None)
+                    
+                    is_sim_abnormal = False
+                    if not self.env.can_execute_action and gripper_hip_height >= 0.1:
+                        reward = 0.
+                        print("[WARN] recorrect the reward")
+                        print(f"[OVERALL REWARD] {reward}")
+                        print(f"[GRIPPER TIP HEIGHT] {gripper_hip_height}")
+                        is_sim_abnormal = True
+
+                    #print actions
+                    print(f"[ACTION TYPE]: {self.action_type}")  
+                    move_msg  = f"[MOVE] xyz: {action.to(torch.device('cpu')).detach().numpy()[0][0:3]}"
+                    move_msg += f" yaw: {np.rad2deg(action.to(torch.device('cpu')).detach().numpy()[0][3])}"
+                    print(move_msg)
+
+                    #check if episode is done
+                    self.episode_done = False if self.env.N_pickable_item > 0 else True
+
+                    #check if action is done
+                    action_done = self.is_action_done(i, N_step_low_level, is_push)                    
+
+                    #get next state 
+                    next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
+                                                                                    gripper_state = next_gripper_state, 
+                                                                                    yaw_ang = next_yaw_state, 
+                                                                                    is_grasp = self.action_type)     
+
+                    #get next state
+                    next_state = torch.concatenate([torch.FloatTensor(next_in_depth_img).unsqueeze(0), 
+                                                    torch.FloatTensor([next_in_yaw_state]).expand(128, 128).unsqueeze(0)], dim=0).unsqueeze(0)
+
+                    #estimate next actions
+                    next_action_est, next_normalised_action_est = self.get_action_from_network(next_state)
+
+                    if expert_mode:                        
+                        n_move = np.array(demo_low_level_actions[i+1] if i+1 < len(demo_low_level_actions) else [0,0,0,0,move[-2],move[-1]])
+                        next_action, next_normalised_action = self.get_action_from_demo(n_move)
+                    else:
+                        next_action, next_normalised_action = next_action_est, next_normalised_action_est
+
+                    #compute next action state
+                    next_action_state = torch.concatenate([next_state[0], 
+                                                        torch.FloatTensor([next_normalised_action[0][0]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([next_normalised_action[0][1]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([next_normalised_action[0][2]]).expand(128, 128).unsqueeze(0),
+                                                        torch.FloatTensor([next_normalised_action[0][3]]).expand(128, 128).unsqueeze(0)],
+                                                        dim = 0).unsqueeze(0).to(self.device)        
+
+                    
+                    #compute next q value
+                    next_q1, next_q2 = self.get_q_value_from_critic(next_action_state, True)
+
+                    #compute priority for experience
+                    priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, expert_mode, normalised_action_est, normalised_action)
+
+                    # store experience during executing low-level action
+                    self.append_lla_exp(depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
+                                        action, next_action, self.action_type, reward, action_done, priority)
+
+                    #check if episode_done
+                    if self.episode_done:
+                        print("[SUCCESS] finish one episode")      
+                        break 
+                    elif action_done:
+
+                        if self.is_success_grasp or i == N_step_low_level - 1 or is_push:
+                            if self.is_success_grasp:
+                                print("[SUCCESS] grasp an item")
+                            elif is_push:
+                                print("[SUCCESS] perform push action")
+                            else:
+                                print("[SUCCESS] finish an action")
+                                
+                        self.is_reset_env()
+                        
+                        break
+                
+                print("=== end of action ===")
+                #update number of action taken
+                self.N_action_taken += 1
+
+                #return home
+                self.env.return_home(self.is_env_reset, self.action_type)
+                self.is_env_reset = False
+
+                if self.is_debug:
+                    print("[SUCCESS] return home")
+
+                time.sleep(0.5) 
+
+                #store transition experience of low-level behaviour  
+                self.depth_states         = np.array(self.depth_states)
+                self.gripper_states       = np.array(self.gripper_states)
+                self.yaw_states           = np.array(self.yaw_states)
+                self.actions              = np.array(self.actions)
+                self.gripper_actions      = np.array(self.gripper_actions)
+                self.next_actions         = np.array(self.next_actions)
+                self.next_gripper_actions = np.array(self.next_gripper_actions)
+                self.action_types         = np.array(self.action_types)
+                self.rewards              = np.array(self.rewards)
+                self.next_depth_states    = np.array(self.next_depth_states)
+                self.action_dones         = np.array(self.action_dones)
+                self.actor_losses         = np.array(self.actor_losses)
+                self.critic_losses        = np.array(self.critic_losses)
+
+                if (self.rewards > 0).sum() > 0:
+                    print("[SUCCESS] GRASP OR PUSH ACTION")
+                else:
+                    print("[FAIL] GRASP OR PUSH ACTION")
+
+                #record success rate for low-level action network
+                if not is_sim_abnormal and not expert_mode:
+
+                    #record success rate of low-level actions network
+                    self.record_success_rate(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
+
+                    #record grasping efficiency
+                    if self.action_type == constants.GRASP:
+                        self.grasp_counter += 1
+                        if np.max(self.rewards) > 0:
+                            self.grasp_success_counter += 1
+
+                    #check if we should change to full training mode
+                    if not self.is_eval:
+                       push_success_rate  = np.sum(self.push_reward_list)/len(self.push_reward_list)
+                       grasp_success_rate = np.sum(self.grasp_reward_list)/len(self.grasp_reward_list)
+
+                       if push_success_rate >= self.success_rate_threshold and grasp_success_rate >= self.success_rate_threshold:
+                            self.is_full_train = True
+
+                if not self.is_eval:
+
+                    #save low-level action to buffer
+                    for ii in range(len(self.depth_states)): 
+                        #only save successful experience when in expert mode
+                        if (expert_mode and (self.rewards > 0).sum() <= 0) or is_sim_abnormal:
+                            continue
+                        
+                        #skip storing experience when rl mode doesn't turn on at all
+                        if not expert_mode and (not self.enable_rl_actor and not self.enable_rl_critic):
+                            continue 
+
+                        buffer_replay.store_transition(self.depth_states[ii], self.gripper_states[ii], self.yaw_states[ii],
+                                                       self.actions[ii], self.gripper_actions[ii], 
+                                                       self.next_actions[ii], self.next_gripper_actions[ii],
+                                                       self.action_types[ii], self.rewards[ii], 
+                                                       self.next_depth_states[ii], self.next_gripper_states[ii], self.next_yaw_states[ii],
+                                                       self.action_dones[ii], 
+                                                       0., 
+                                                       0.,
+                                                       True if (self.rewards > 0).sum() > 0 else False,
+                                                       self.actor_losses[ii], self.critic_losses[ii]) 
+                    
+                    if self.is_debug:
+                        print('[SUCCESS] store transition experience for low-level action')   
+
+                    self.online_update(action_type = self.action_type)
+
+                    if self.is_debug:
+                        print('[SUCCESS] online update')
+
+                    #save low-level network model
+                    self.save_models(self.action_type, self.episode_done, expert_mode)
+
+                    if self.is_full_train:
+                        
+                        if not is_sim_abnormal:
+
+                            hld_reward = self.env.reward_hld(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
+
+                            #get raw data
+                            _, next_hld_depth_img = self.env.get_rgbd_data()
+
+                            in_next_hld_depth_img, _, _ = self.preprocess_state(depth_img     = next_hld_depth_img, 
+                                                                                gripper_state = None, 
+                                                                                yaw_ang       = None)
+                            
+                            next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
+
+                            #compute priority
+                            self.hld_net.eval()
+                            self.hld_net_target.eval()
+                            with torch.no_grad():
+                                _, next_action_type = self.hld_net.make_decisions(next_hld_state, take_max = True)
+
+                                next_hld_q_value, _ = self.hld_net_target.make_decisions(next_hld_state, take_max = True)
+                                next_hld_q_value = next_hld_q_value[0][next_action_type]
+
+                                target_hld_q_values = hld_reward + (1. - self.episode_done)*self.gamma*next_hld_q_value
+
+                                current_hld_q = hld_q_values[0][self.action_type]
+                                hld_critic_loss = nn.MSELoss()(current_hld_q, target_hld_q_values).to(torch.device('cpu')).detach().numpy()
+
+                                print(f"[HLD reward] r: {hld_reward}")
+                                print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][self.action_type]}, target q: {target_hld_q_values}, action type: {self.action_type} next action type: {next_action_type}")
+                                print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
+
+                            self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, self.episode_done, hld_critic_loss)
+
+                            self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
+                                                                    self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_loss[-1])
+                        
+                        #update hld-net
+                        self.online_update_hld()
+
+                        if self.is_debug:
+                            print('[SUCCESS] online update')
+
+                #save agent data
+                self.save_agent_data()
+
+                if self.is_debug:
+                    print("[SUCCESS] save agent data")
+
+            print("=== end of episode ===")
+
+            if self.is_eval:
+                if self.env.N_pickable_item <= 0:
+                    self.CR_eval[self.eval_index] = 1
+                else:
+                    self.CR_eval[self.eval_index] = 0
+
+                self.AGS_eval[self.eval_index] = self.grasp_success_counter/self.grasp_counter
+                self.ATC_eval[self.eval_index] = self.N_action_taken
+
+                #update hld record index
+                self.eval_index += 1
+                if self.eval_index >= self.max_result_window_eval:
+                    self.eval_index = 0
+
+                #save agent data
+                self.save_agent_data()
+
+            elif self.is_full_train:
+                if self.env.N_pickable_item <= 0:
+                    self.hld_record_list[self.hld_record_index] = 1
+                else:
+                    self.hld_record_list[self.hld_record_index] = 0
+
+                self.hld_step_list[self.hld_record_index] = self.N_action_taken
+
+                #update hld record index
+                self.hld_record_index += 1
+                if self.hld_record_index >= self.max_result_window:
+                    self.hld_record_index = 0
+
+                #save hld-net model
+                self.save_models_hld()
+
+                #save agent data
+                self.save_agent_data()
+                
+            if not self.is_eval and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
+                
+                if self.enable_bc:
+                    self.buffer_replay_expert.save_all_exp_to_dir()
+                    print("[SUCCESS] update all bc experience priorities")
+                if self.enable_rl_actor or self.enable_rl_critic:
+                    self.buffer_replay.save_all_exp_to_dir()
+                    print("[SUCCESS] update all rl experience priorities")
+                if self.is_full_train:
+                    self.buffer_replay_hld.save_all_exp_to_dir()
+                    print("[SUCCESS] update all hld-net experience priorities")
+
+                print("[SUCCESS] update all experience priorities")
+
+            #update episode
+            episode += 1
