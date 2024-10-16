@@ -309,7 +309,7 @@ class Agent():
         self.hld_rewards.append(reward)
         self.hld_next_depth_states.append(next_depth_state)
         self.hld_dones.append(done)
-        self.hld_critic_loss.append(critic_loss)
+        self.hld_critic_losses.append(critic_loss)
 
     def append_lla_exp(self, depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
                        action, next_action, action_type, reward, action_done, priority):
@@ -619,6 +619,25 @@ class Agent():
 
         return priority
 
+    def compute_priority_hld(self, next_hld_state, hld_reward, current_hld_q):
+        #compute priority
+        self.hld_net.eval()
+        self.hld_net_target.eval()
+        with torch.no_grad():
+            _, next_action_type = self.hld_net.make_decisions(next_hld_state, take_max = True)
+
+            next_hld_q_value, _ = self.hld_net_target.make_decisions(next_hld_state, take_max = True)
+            next_hld_q_value = next_hld_q_value[0][next_action_type]
+
+            target_hld_q_values = hld_reward + (1. - self.episode_done)*self.gamma*next_hld_q_value
+
+            # current_hld_q = hld_q_values[0][self.action_type]
+            hld_critic_loss = nn.MSELoss()(current_hld_q, target_hld_q_values).to(torch.device('cpu')).detach().numpy()
+
+            print(f"[HLD reward] r: {hld_reward}")
+            print(f"[HLD CRITIC LOSS] q: {current_hld_q}, target q: {target_hld_q_values}, action type: {self.action_type} next action type: {next_action_type}")
+            print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
+
     def is_reset_env(self, is_expert):
         #check if out of working space
         if self.env.is_out_of_working_space:
@@ -648,6 +667,21 @@ class Agent():
 
             self.is_env_reset = True
             print("[WARN] stop executing this action!")
+
+    def is_save_all_exp(self, episode, max_episode):
+        if not self.is_eval and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
+            
+            if self.enable_bc:
+                self.buffer_replay_expert.save_all_exp_to_dir()
+                print("[SUCCESS] update all bc experience priorities")
+            if self.enable_rl_actor or self.enable_rl_critic:
+                self.buffer_replay.save_all_exp_to_dir()
+                print("[SUCCESS] update all rl experience priorities")
+            if self.is_full_train:
+                self.buffer_replay_hld.save_all_exp_to_dir()
+                print("[SUCCESS] update all hld-net experience priorities")
+
+            print("[SUCCESS] update all experience priorities")
 
     def compute_state_batch_and_state_action_batch(self, action_type, depth_states, gripper_states, yaw_states, actions = None, gripper_actions = None):
 
@@ -755,6 +789,9 @@ class Agent():
         self.hld_net.optimiser.step()
 
         self.soft_update(self.hld_net, self.hld_net_target, self.tau_hld)
+
+        if self.is_debug:
+            print('[SUCCESS] online update')
 
     def online_update(self, action_type):
         
@@ -993,6 +1030,9 @@ class Agent():
                                                     actor_loss_bc_no_reduce.to(torch.device('cpu')).detach().numpy(),
                                                     critic_loss_bc_no_reduce.to(torch.device('cpu')).detach().numpy())
 
+        if self.is_debug:
+            print('[SUCCESS] online update')
+
     def compute_critic_loss(self, 
                             action_type, 
                             action_state_batch, 
@@ -1182,13 +1222,13 @@ class Agent():
         self.hld_net_target.save_checkpoint()
         print("[SUCCESS] save hld models check point")
 
-    def save_models(self, action_type, episode_done, expert_mode):
+    def save_models(self, action_type, episode_done, is_expert):
 
         if action_type == constants.GRASP:
             #save grasp network
             grasp_reward_sum = np.sum(self.grasp_reward_list)
             
-            if not expert_mode and self.best_grasp_reward_sum < grasp_reward_sum:
+            if not is_expert and self.best_grasp_reward_sum < grasp_reward_sum:
                 self.best_grasp_reward_sum = grasp_reward_sum
                 self.grasp_actor.save_checkpoint(True)
                 self.grasp_critic1.save_checkpoint(True)
@@ -1199,11 +1239,8 @@ class Agent():
         else:
             #save push network
             push_reward_sum = np.sum(self.push_reward_list)
-            # print(f"[PUSH REWARD SUM] push_reward_sum: {push_reward_sum}/{self.best_push_reward_sum}")
-            # if not expert_mode and (self.enable_rl_critic or self.enable_rl_actor or self.enable_bc):            
-            #     self.push_reward_sum_hist.append(push_reward_sum)
  
-            if not expert_mode and self.best_push_reward_sum < push_reward_sum:
+            if not is_expert and self.best_push_reward_sum < push_reward_sum:
                 self.best_push_reward_sum = push_reward_sum
                 self.push_actor.save_checkpoint(True)
                 self.push_critic1.save_checkpoint(True)
@@ -1329,6 +1366,9 @@ class Agent():
         with open(file_name, 'wb') as file:
             pickle.dump(data_dict, file)
 
+        if self.is_debug:
+            print("[SUCCESS] save agent data")
+
     def load_agent_data(self):
 
         if self.is_eval:
@@ -1400,7 +1440,7 @@ class Agent():
                 hld_q_values, demo_low_level_actions, delta_moves_grasp, delta_moves_push, hld_depth_img = self.get_hld_decision()
 
                 #decide if it should enter demo mode
-                expert_mode, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
+                is_expert, buffer_replay, N_step_low_level = self.is_expert_mode(demo_low_level_actions)
                 print(f"N_step_low_level: {N_step_low_level}")
 
                 if self.env.N_pickable_item <= 0:
@@ -1413,7 +1453,7 @@ class Agent():
                 for i in range(N_step_low_level):
                     
                     update_mode_msg = f"ENABLE BC: {self.enable_bc} ENABLE RL CRITIC: {self.enable_rl_critic} ENABLE RL ACTOR: {self.enable_rl_actor}"
-                    if expert_mode:
+                    if is_expert:
                         print("==== EXPERT MODE " + update_mode_msg + " ====") 
                     else:
                         print("==== AGENT MODE " + update_mode_msg + " ====") 
@@ -1440,7 +1480,7 @@ class Agent():
                     action_est, normalised_action_est = self.get_action_from_network(state)
 
                     #action from demo
-                    if expert_mode:
+                    if is_expert:
                         move = np.array(demo_low_level_actions[i])
                         action, normalised_action = self.get_action_from_demo(move)
                     else:
@@ -1496,7 +1536,7 @@ class Agent():
                     #estimate next actions
                     next_action_est, next_normalised_action_est = self.get_action_from_network(next_state)
 
-                    if expert_mode:                        
+                    if is_expert:                        
                         n_move = np.array(demo_low_level_actions[i+1] if i+1 < len(demo_low_level_actions) else [0,0,0,0,move[-2],move[-1]])
                         next_action, next_normalised_action = self.get_action_from_demo(n_move)
                     else:
@@ -1515,7 +1555,7 @@ class Agent():
                     next_q1, next_q2 = self.get_q_value_from_critic(next_action_state, True)
 
                     #compute priority for experience
-                    priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, expert_mode, normalised_action_est, normalised_action)
+                    priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, normalised_action_est, normalised_action)
 
                     # store experience during executing low-level action
                     self.append_lla_exp(depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
@@ -1553,27 +1593,14 @@ class Agent():
                 time.sleep(0.5) 
 
                 #store transition experience of low-level behaviour  
-                self.depth_states         = np.array(self.depth_states)
-                self.gripper_states       = np.array(self.gripper_states)
-                self.yaw_states           = np.array(self.yaw_states)
-                self.actions              = np.array(self.actions)
-                self.gripper_actions      = np.array(self.gripper_actions)
-                self.next_actions         = np.array(self.next_actions)
-                self.next_gripper_actions = np.array(self.next_gripper_actions)
-                self.action_types         = np.array(self.action_types)
-                self.rewards              = np.array(self.rewards)
-                self.next_depth_states    = np.array(self.next_depth_states)
-                self.action_dones         = np.array(self.action_dones)
-                self.actor_losses         = np.array(self.actor_losses)
-                self.critic_losses        = np.array(self.critic_losses)
 
-                if (self.rewards > 0).sum() > 0:
+                if (np.array(self.rewards) > 0).sum() > 0:
                     print("[SUCCESS] GRASP OR PUSH ACTION")
                 else:
                     print("[FAIL] GRASP OR PUSH ACTION")
 
                 #record success rate for low-level action network
-                if not is_sim_abnormal and not expert_mode:
+                if not is_sim_abnormal and not is_expert:
 
                     #record success rate of low-level actions network
                     self.record_success_rate(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
@@ -1597,11 +1624,11 @@ class Agent():
                     #save low-level action to buffer
                     for ii in range(len(self.depth_states)): 
                         #only save successful experience when in expert mode
-                        if (expert_mode and (self.rewards > 0).sum() <= 0) or is_sim_abnormal:
+                        if (is_expert and (np.array(self.rewards) > 0).sum() <= 0) or is_sim_abnormal:
                             continue
                         
                         #skip storing experience when rl mode doesn't turn on at all
-                        if not expert_mode and (not self.enable_rl_actor and not self.enable_rl_critic):
+                        if not is_expert and (not self.enable_rl_actor and not self.enable_rl_critic):
                             continue 
 
                         buffer_replay.store_transition(self.depth_states[ii], self.gripper_states[ii], self.yaw_states[ii],
@@ -1612,7 +1639,7 @@ class Agent():
                                                        self.action_dones[ii], 
                                                        0., 
                                                        0.,
-                                                       True if (self.rewards > 0).sum() > 0 else False,
+                                                       True if (np.array(self.rewards) > 0).sum() > 0 else False,
                                                        self.actor_losses[ii], self.critic_losses[ii]) 
                     
                     if self.is_debug:
@@ -1620,11 +1647,8 @@ class Agent():
 
                     self.online_update(action_type = self.action_type)
 
-                    if self.is_debug:
-                        print('[SUCCESS] online update')
-
                     #save low-level network model
-                    self.save_models(self.action_type, self.episode_done, expert_mode)
+                    self.save_models(self.action_type, self.episode_done, is_expert)
 
                     if self.is_full_train:
                         
@@ -1642,39 +1666,20 @@ class Agent():
                             next_hld_state = torch.FloatTensor(in_next_hld_depth_img).unsqueeze(0).unsqueeze(0)
 
                             #compute priority
-                            self.hld_net.eval()
-                            self.hld_net_target.eval()
-                            with torch.no_grad():
-                                _, next_action_type = self.hld_net.make_decisions(next_hld_state, take_max = True)
+                            hld_critic_loss = self.compute_priority_hld(next_hld_state, hld_reward, hld_q_values[0][self.action_type])
 
-                                next_hld_q_value, _ = self.hld_net_target.make_decisions(next_hld_state, take_max = True)
-                                next_hld_q_value = next_hld_q_value[0][next_action_type]
-
-                                target_hld_q_values = hld_reward + (1. - self.episode_done)*self.gamma*next_hld_q_value
-
-                                current_hld_q = hld_q_values[0][self.action_type]
-                                hld_critic_loss = nn.MSELoss()(current_hld_q, target_hld_q_values).to(torch.device('cpu')).detach().numpy()
-
-                                print(f"[HLD reward] r: {hld_reward}")
-                                print(f"[HLD CRITIC LOSS] q: {hld_q_values[0][self.action_type]}, target q: {target_hld_q_values}, action type: {self.action_type} next action type: {next_action_type}")
-                                print(f"[HLD CRITIC LOSS] hld critic loss: {hld_critic_loss}")
-
+                            #append hld experience
                             self.append_hld_exp(hld_depth_img, self.action_types[0], hld_reward, next_hld_depth_img, self.episode_done, hld_critic_loss)
 
+                            #store hld experience
                             self.buffer_replay_hld.store_transition(self.hld_depth_states[-1], self.hld_action_types[-1], self.hld_rewards[-1],
-                                                                    self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_loss[-1])
+                                                                    self.hld_next_depth_states[-1], self.hld_dones[-1], self.hld_critic_losses[-1])
                         
                         #update hld-net
                         self.online_update_hld()
 
-                        if self.is_debug:
-                            print('[SUCCESS] online update')
-
                 #save agent data
                 self.save_agent_data()
-
-                if self.is_debug:
-                    print("[SUCCESS] save agent data")
 
             print("=== end of episode ===")
 
@@ -1713,20 +1718,9 @@ class Agent():
 
                 #save agent data
                 self.save_agent_data()
-                
-            if not self.is_eval and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
-                
-                if self.enable_bc:
-                    self.buffer_replay_expert.save_all_exp_to_dir()
-                    print("[SUCCESS] update all bc experience priorities")
-                if self.enable_rl_actor or self.enable_rl_critic:
-                    self.buffer_replay.save_all_exp_to_dir()
-                    print("[SUCCESS] update all rl experience priorities")
-                if self.is_full_train:
-                    self.buffer_replay_hld.save_all_exp_to_dir()
-                    print("[SUCCESS] update all hld-net experience priorities")
 
-                print("[SUCCESS] update all experience priorities")
+            #check if save all experience to harddisk
+            self.is_save_all_exp(episode, max_episode)
 
             #update episode
             episode += 1
