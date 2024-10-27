@@ -333,10 +333,6 @@ class Env():
 
     def add_items(self, reset_item = False, clustered_mode = False):
 
-        # if self.cluttered_mode :
-        #     x_center = self.x_center + np.random.uniform(-1, 1)*(self.x_length/2. - 0.05)
-        #     y_center = self.y_center + np.random.uniform(-1, 1)*(self.x_length/2. - 0.05)
-
         #initialise item handles
         for i, path_ind in enumerate(self.item_data_dict['path_ind']):
             
@@ -878,7 +874,7 @@ class Env():
         is_push = False
         if action_type ==constants.GRASP:
             #TODO [NOTE ON 15/09/2024]: change it to tunable parameters later if workable
-            if gripper_tip_pos[2] <= 0.05: 
+            if gripper_tip_pos[2] <= constants.GRASP_HEIGHT: 
                 target = self.gripper_joint_close
                 is_open_gripper = False
             else:
@@ -898,7 +894,7 @@ class Env():
 
             print(f"gripper tip height: {gripper_tip_pos[2]}")
 
-            if gripper_tip_pos[2] <= 0.05:
+            if gripper_tip_pos[2] <= constants.PUSH_HEIGHT:
                 yaw = gripper_tip_ori[2]
                 
                 delta_push = [np.cos(yaw + np.pi/2.)*constants.PUSH_MAX_ACTION[0], 
@@ -1036,7 +1032,7 @@ class Env():
             R_b2w  = utils.quaternion_to_rotation_matrix(wxyz)
 
             #get item rotation matrix (from object frame to world frame)
-            # if path_ind != 2:
+            # if path_ind != 1:
             #     R_o2b = np.array([[0, 0, 1],
             #                       [0, 1, 0],
             #                       [1, 0, 0]])
@@ -1044,8 +1040,8 @@ class Env():
             #     R_o2b = np.eye(3)
 
             R_o2b = np.array([[0, 0, 1],
-                                [0, 1, 0],
-                                [1, 0, 0]])
+                              [0, 1, 0],
+                              [1, 0, 0]])
 
             R = np.matmul(R_b2w, R_o2b)
             Ro2w_items.append(R)
@@ -1283,7 +1279,7 @@ class Env():
                 is_collision_at_start_pt = False
 
                 for j in range(len(center_items)):
-                    is_collision_at_start_pt = self.is_within_bbox(gripper_tip_box, center_items[j], size_items[j], Ro2w_items[j], margin = 0.005)
+                    is_collision_at_start_pt = self.is_within_bbox(gripper_tip_box, center_items[j], size_items[j], Ro2w_items[j], margin = 0.01)
                     if is_collision_at_start_pt:
                         break
 
@@ -1533,12 +1529,12 @@ class Env():
 
                 is_get_grasp_target = True
 
-                item_ind        = sorted_item_ind[i]
+                item_ind = sorted_item_ind[i]
                 target_item_pos_grasp = sorted_items_pos[i]
 
                 #compute linear movement N_step
                 #offset the delta to ensure the gripper tip is not in collision with the ground/target item
-                delta_lin       = sorted_delta_vecs[i] + np.array([0,0,offset_z]) 
+                delta_lin = sorted_delta_vecs[i] + np.array([0,0,offset_z]) 
                 delta_lin_norm  = np.linalg.norm(delta_lin)
                 lin_unit_vector = delta_lin/delta_lin_norm
 
@@ -1546,7 +1542,7 @@ class Env():
                 _, _, delta_ori = self.compute_guidance_grasp_ang(item_ind, bbox_items)
 
                 #get a unified N_step
-                N_step          = self.N_step_grasp
+                N_step = self.N_step_grasp
 
                 #compute magnitude of each delta move
                 step_mag_lin = np.linspace(0, delta_lin_norm, N_step, endpoint = True)
@@ -1580,7 +1576,7 @@ class Env():
                 is_get_push_target = True
 
                 #compute the closest point between two items and push start point
-                target_ind      = sorted_item_ind[i]
+                target_ind = sorted_item_ind[i]
                 target_item_pos_push = sorted_items_pos[i]
 
                 push_point, be4_push_point = self.compute_push_path(center_items,
@@ -1592,13 +1588,13 @@ class Env():
                                                                     neighbour_corner)
 
                 #move from the home position to the starting point of pushing
-                push_home2start          = be4_push_point + np.array([0, 0, offset_z_push]) - np.array(gripper_tip_pos)
-                push_home2start_norm     = np.linalg.norm(push_home2start)
+                push_home2start = be4_push_point + np.array([0, 0, offset_z_push]) - np.array(gripper_tip_pos)
+                push_home2start_norm = np.linalg.norm(push_home2start)
                 push_home2start_unit_vec = push_home2start/push_home2start_norm
 
                 #move from just starting point of pushing to closest point between two items
-                push_start2closest          = push_point - be4_push_point
-                push_start2closest_norm     = np.linalg.norm(push_start2closest)
+                push_start2closest = push_point - be4_push_point
+                push_start2closest_norm = np.linalg.norm(push_start2closest)
                 push_start2closest_unit_vec = push_start2closest/push_start2closest_norm
 
                 #compute target yaw angle 
@@ -1614,11 +1610,11 @@ class Env():
                 N_step = self.N_step_push
 
                 #compute step magnitude of each step
-                step_mag_lin_home2start    = np.linspace(0, push_home2start_norm, N_step, endpoint = True)
-                step_mag_lin_home2start    = step_mag_lin_home2start[1:] - step_mag_lin_home2start[0:-1]
+                step_mag_lin_home2start = np.linspace(0, push_home2start_norm, N_step, endpoint = True)
+                step_mag_lin_home2start = step_mag_lin_home2start[1:] - step_mag_lin_home2start[0:-1]
         
-                step_mag_ori_home2start    = np.linspace(0, delta_yaw, N_step, endpoint = True)
-                step_mag_ori_home2start    = step_mag_ori_home2start[1:] - step_mag_ori_home2start[0:-1]
+                step_mag_ori_home2start = np.linspace(0, delta_yaw, N_step, endpoint = True)
+                step_mag_ori_home2start = step_mag_ori_home2start[1:] - step_mag_ori_home2start[0:-1]
 
                 #move to the point on top of the push start point
                 for j in range(len(step_mag_lin_home2start)):
@@ -1629,8 +1625,11 @@ class Env():
                                             0, 1])
                 
                 #move downward to reach the push start point
-                delta_move_push.append([0,0,-offset_z_push*0.5, 0, 0, 1]) #+1
-                # delta_move_push.append([0,0,-offset_z_push*1.05, 0, 0, 1]) #+1
+                if be4_push_point[2] + offset_z_push*0.5 < constants.PUSH_HEIGHT:
+                    delta_move_push.append([0,0,-offset_z_push*0.5, 0, 0, 1]) #+1
+                else:
+                    down_z = be4_push_point[2] + offset_z_push - constants.PUSH_HEIGHT
+                    delta_move_push.append([0,0,-down_z, 0, 0, 1])
 
                 # #push item
                 # delta_move.append([push_start2closest_unit_vec[0]*push_max_move, 

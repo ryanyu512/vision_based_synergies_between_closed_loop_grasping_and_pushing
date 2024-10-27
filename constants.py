@@ -46,9 +46,14 @@ HOME_POSE = [-0.11120,
 #initialise working space center
 WORK_SPACE_CENTER = [-0.110, 0.560, 0.001]
 WORK_SPACE_DIM    = [0.30, 0.25, 0.]
+
 #max actions for the networks
 MAX_ACTION      = [0.07, 0.07, 0.07, np.deg2rad(30.)]
 PUSH_MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(45.)]
+
+#define push height
+PUSH_HEIGHT  = 0.05
+GRASP_HEIGHT = 0.05
 
 #define the maximum possible distance
 MAX_POSSIBLE_DIST = 0.

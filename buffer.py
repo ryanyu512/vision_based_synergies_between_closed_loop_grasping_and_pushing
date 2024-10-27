@@ -18,58 +18,54 @@ class BufferReplay():
                  prioritised_prob       = 0.8,
                  is_debug               = True): 
       
-        self.have_grasp_data        = False
-        self.have_push_data         = False
-        self.grasp_data_size        = 0
-        self.push_data_size         = 0
-        self.max_memory_size        = max_memory_size
-        self.memory_cntr            = 0
-        self.img_size               = img_size
-        self.N_action               = N_action
+        self.have_grasp_data = False
+        self.have_push_data = False
+        self.grasp_data_size = 0
+        self.push_data_size = 0
+        self.max_memory_size = max_memory_size
+        self.memory_cntr = 0
+        self.img_size = img_size
+        self.N_action = N_action
         self.N_gripper_action_type  = N_gripper_action_type
         #initialise if the memory is full
-        self.is_full                = False
+        self.is_full = False
         #initialise power value for prioritisation
-        self.alpha                  = alpha
+        self.alpha = alpha
         #initialise small constant to prevent division by zero
-        self.sm_c                   = 1e-6
+        self.sm_c = 1e-6
 
         #current depth state
-        self.depth_states         = np.zeros((self.max_memory_size, self.img_size, self.img_size))
+        self.depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #current gripper state 
-        self.gripper_states       = np.zeros(self.max_memory_size)
+        self.gripper_states = np.zeros(self.max_memory_size)
         #current yaw angles
-        self.yaw_states           = np.zeros(self.max_memory_size)
+        self.yaw_states = np.zeros(self.max_memory_size)
         #current action
-        self.actions              = np.zeros((self.max_memory_size, self.N_action))
+        self.actions = np.zeros((self.max_memory_size, self.N_action))
         #current gripper action
-        self.gripper_actions      = np.zeros((self.max_memory_size))
+        self.gripper_actions = np.zeros((self.max_memory_size))
         #next action
-        self.next_actions         = np.zeros((self.max_memory_size, self.N_action))
+        self.next_actions = np.zeros((self.max_memory_size, self.N_action))
         #next gripper action
         self.next_gripper_actions = np.zeros((self.max_memory_size))
         #current action type
-        self.action_types         = np.ones(self.max_memory_size)*-1
+        self.action_types = np.ones(self.max_memory_size)*-1
         #next reward
-        self.rewards              = np.zeros(self.max_memory_size)
+        self.rewards = np.zeros(self.max_memory_size)
         #next state
-        self.next_depth_states    = np.zeros((self.max_memory_size, self.img_size, self.img_size))
+        self.next_depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #current gripper state 
-        self.next_gripper_states  = np.zeros(self.max_memory_size)
+        self.next_gripper_states = np.zeros(self.max_memory_size)
         #current yaw angles
-        self.next_yaw_states      = np.zeros(self.max_memory_size)
+        self.next_yaw_states = np.zeros(self.max_memory_size)
         #is done in the next state
-        self.dones                = np.zeros(self.max_memory_size, dtype = bool)
-        #predicted q value: 
-        self.predict_qs           = np.zeros(self.max_memory_size)
-        #labeled q value: reward + gamma*min(target_q1, target_q2)
-        self.labeled_qs           = np.zeros(self.max_memory_size)
+        self.dones = np.zeros(self.max_memory_size, dtype = bool)
         #indicate if this experience is a successful experience
-        self.success_mask         = np.zeros(self.max_memory_size, dtype = bool)
+        self.success_mask = np.zeros(self.max_memory_size, dtype = bool)
         #surprise value
-        self.priority             = np.ones(self.max_memory_size)
+        self.priority = np.ones(self.max_memory_size)
         #initialise prioritised sampling probability
-        self.prioritised_prob     = prioritised_prob
+        self.prioritised_prob = prioritised_prob
 
         #initialise check point directory
         if not os.path.exists(checkpt_dir):
@@ -79,7 +75,7 @@ class BufferReplay():
         #check the data size in hardware storage
         self.data_length = len(os.listdir(self.checkpt_dir))
 
-        self.is_debug    = is_debug
+        self.is_debug = is_debug
 
         try:
             if load_checkpt_dir is None:
@@ -92,43 +88,39 @@ class BufferReplay():
 
     def init_mem_size(self, max_memory_size):
 
-        self.max_memory_size      = max_memory_size
-        self.memory_cntr          = 0
+        self.max_memory_size = max_memory_size
+        self.memory_cntr = 0
 
         #current depth state
-        self.depth_states         = np.zeros((self.max_memory_size, self.img_size, self.img_size))
+        self.depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #current gripper state 
-        self.gripper_states       = np.zeros(self.max_memory_size)
+        self.gripper_states = np.zeros(self.max_memory_size)
         #current yaw angles
-        self.yaw_states           = np.zeros(self.max_memory_size)
+        self.yaw_states = np.zeros(self.max_memory_size)
         #current action
-        self.actions              = np.zeros((self.max_memory_size, self.N_action))
+        self.actions = np.zeros((self.max_memory_size, self.N_action))
         #current gripper action
-        self.gripper_actions      = np.zeros((self.max_memory_size))
+        self.gripper_actions = np.zeros((self.max_memory_size))
         #next action
-        self.next_actions         = np.zeros((self.max_memory_size, self.N_action))
+        self.next_actions = np.zeros((self.max_memory_size, self.N_action))
         #next gripper action
         self.next_gripper_actions = np.zeros((self.max_memory_size))
         #current action type
-        self.action_types         = np.ones(self.max_memory_size)*-1
+        self.action_types = np.ones(self.max_memory_size)*-1
         #next reward
-        self.rewards              = np.zeros(self.max_memory_size)
+        self.rewards = np.zeros(self.max_memory_size)
         #next state
-        self.next_depth_states    = np.zeros((self.max_memory_size, self.img_size, self.img_size))
+        self.next_depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
         #current gripper state 
-        self.next_gripper_states  = np.zeros(self.max_memory_size)
+        self.next_gripper_states = np.zeros(self.max_memory_size)
         #current yaw angles
-        self.next_yaw_states      = np.zeros(self.max_memory_size)
+        self.next_yaw_states = np.zeros(self.max_memory_size)
         #is done in the next state
-        self.dones                = np.zeros(self.max_memory_size, dtype = bool)
-        #predicted q value: 
-        self.predict_qs           = np.zeros(self.max_memory_size)
-        #labeled q value: reward + gamma*min(target_q1, target_q2)
-        self.labeled_qs           = np.zeros(self.max_memory_size)
+        self.dones = np.zeros(self.max_memory_size, dtype = bool)
         #indicate if this experience is a successful experience
-        self.success_mask         = np.zeros(self.max_memory_size, dtype = bool)
+        self.success_mask = np.zeros(self.max_memory_size, dtype = bool)
         #surprise value
-        self.priority             = np.ones(self.max_memory_size)
+        self.priority = np.ones(self.max_memory_size)
 
     def store_transition(self, 
                          depth_state, gripper_state, yaw_state, 
@@ -137,7 +129,7 @@ class BufferReplay():
                          action_type,reward, 
                          next_depth_state, next_gripper_state, 
                          next_yaw_state, done, 
-                         predict_q, labeled_q, is_success, 
+                         is_success, 
                          priority,
                          is_save_to_dir = True):
 
@@ -179,8 +171,6 @@ class BufferReplay():
         self.next_gripper_states[self.memory_cntr]    = next_gripper_state
         self.next_yaw_states[self.memory_cntr]        = next_yaw_state
         self.dones[self.memory_cntr]                  = done
-        self.predict_qs[self.memory_cntr]             = predict_q
-        self.labeled_qs[self.memory_cntr]             = labeled_q
         self.success_mask[self.memory_cntr]           = is_success
         self.priority[self.memory_cntr]               = priority_
 
@@ -199,8 +189,6 @@ class BufferReplay():
                 'next_gripper_state': next_gripper_state,
                 'next_yaw_state': next_yaw_state,
                 'done': done,
-                'predict_q':  predict_q,
-                'labeled_q':  labeled_q,
                 'success_mask':  is_success,
                 'priority': priority,
             }
@@ -233,14 +221,12 @@ class BufferReplay():
         next_gripper_states    = self.next_gripper_states[:max_index][action_index]
         next_yaw_states        = self.next_yaw_states[:max_index][action_index]
         dones                  = self.dones[:max_index][action_index]
-        predict_qs             = self.predict_qs[:max_index][action_index]
-        labeled_qs             = self.labeled_qs[:max_index][action_index]
         success_mask           = self.success_mask[:max_index][action_index]
 
         return action_index, priorities, depth_states, gripper_states, yaw_states, \
                actions, gripper_actions, next_actions, next_gripper_actions, \
                rewards, next_depth_states, next_gripper_states, next_yaw_states, \
-               dones, predict_qs, labeled_qs, success_mask
+               dones, success_mask
 
     def sample_buffer(self, batch_size, action_type):
         #            0,          1,            2,              3,          4,             
@@ -249,8 +235,8 @@ class BufferReplay():
         # actions, gripper_actions, next_actions, next_gripper_actions, 
         #       9,                10,                  11,              12,
         # rewards, next_depth_states, next_gripper_states, next_yaw_states,
-        #    13,         14,         15,           16                      
-        # dones, predict_qs, labeled_qs, success_mask 
+        #    13,          14                      
+        # dones, success_mask 
 
         experience = self.get_experience_by_action_type(action_type)
 
@@ -281,7 +267,7 @@ class BufferReplay():
         batch_next_gripper_states    = experience[11][batch]
         batch_next_yaw_states        = experience[12][batch]
         batch_dones                  = experience[13][batch]
-        batch_success_mask           = experience[16][batch]
+        batch_success_mask           = experience[14][batch]
         
         return batch, batch_depth_states, batch_gripper_states, batch_yaw_states, \
                batch_actions, batch_gripper_actions, batch_next_actions, batch_next_gripper_actions, \
@@ -308,8 +294,6 @@ class BufferReplay():
                 'next_gripper_state': self.next_gripper_states[i],
                 'next_yaw_state': self.next_yaw_states[i],
                 'done': self.dones[i],
-                'predict_q':  self.predict_qs[i],
-                'labeled_q':  self.labeled_qs[i],
                 'success_mask':  self.success_mask[i],
                 'priority': self.priority[i],
             }
@@ -370,8 +354,6 @@ class BufferReplay():
                 self.next_gripper_states[i]    = data_dict['next_gripper_state']
                 self.next_yaw_states[i]        = data_dict['next_yaw_state']
                 self.dones[i]                  = data_dict['done']              
-                self.predict_qs[i]             = data_dict['predict_q']         
-                self.labeled_qs[i]             = data_dict['labeled_q'] 
                 self.success_mask[i]           = data_dict['success_mask'] 
                 self.priority[i]               = data_dict['priority']  
 

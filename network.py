@@ -228,10 +228,13 @@ class Critic(nn.Module):
         
         return x
 
-    def save_checkpoint(self, is_best = False):
+    def save_checkpoint(self, is_best = False, name = None):
 
         if is_best:
             torch.save(self.state_dict(), self.checkpt_file)
+        elif not is_best and name is not None:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_' + name + '_sac_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
         else:
             checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_sac_checkpt'))
             torch.save(self.state_dict(), checkpt_file)
@@ -415,9 +418,12 @@ class Actor(nn.Module):
 
         return log_probs.float()
 
-    def save_checkpoint(self, is_best = False):
+    def save_checkpoint(self, is_best = False, name = None):
         if is_best:
             torch.save(self.state_dict(), self.checkpt_file)
+        elif not is_best and name is not None:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_' + name + '_sac_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
         else:
             checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_sac_checkpt'))
             torch.save(self.state_dict(), checkpt_file)
