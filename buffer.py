@@ -33,39 +33,13 @@ class BufferReplay():
         self.alpha = alpha
         #initialise small constant to prevent division by zero
         self.sm_c = 1e-6
-
-        #current depth state
-        self.depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
-        #current gripper state 
-        self.gripper_states = np.zeros(self.max_memory_size)
-        #current yaw angles
-        self.yaw_states = np.zeros(self.max_memory_size)
-        #current action
-        self.actions = np.zeros((self.max_memory_size, self.N_action))
-        #current gripper action
-        self.gripper_actions = np.zeros((self.max_memory_size))
-        #next action
-        self.next_actions = np.zeros((self.max_memory_size, self.N_action))
-        #next gripper action
-        self.next_gripper_actions = np.zeros((self.max_memory_size))
-        #current action type
-        self.action_types = np.ones(self.max_memory_size)*-1
-        #next reward
-        self.rewards = np.zeros(self.max_memory_size)
-        #next state
-        self.next_depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
-        #current gripper state 
-        self.next_gripper_states = np.zeros(self.max_memory_size)
-        #current yaw angles
-        self.next_yaw_states = np.zeros(self.max_memory_size)
-        #is done in the next state
-        self.dones = np.zeros(self.max_memory_size, dtype = bool)
-        #indicate if this experience is a successful experience
-        self.success_mask = np.zeros(self.max_memory_size, dtype = bool)
-        #surprise value
-        self.priority = np.ones(self.max_memory_size)
         #initialise prioritised sampling probability
         self.prioritised_prob = prioritised_prob
+
+        #current action type
+        self.action_types = np.ones(self.max_memory_size)*-1
+        #surprise value
+        self.priority = np.ones(self.max_memory_size)
 
         #initialise check point directory
         if not os.path.exists(checkpt_dir):
@@ -91,34 +65,8 @@ class BufferReplay():
         self.max_memory_size = max_memory_size
         self.memory_cntr = 0
 
-        #current depth state
-        self.depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
-        #current gripper state 
-        self.gripper_states = np.zeros(self.max_memory_size)
-        #current yaw angles
-        self.yaw_states = np.zeros(self.max_memory_size)
-        #current action
-        self.actions = np.zeros((self.max_memory_size, self.N_action))
-        #current gripper action
-        self.gripper_actions = np.zeros((self.max_memory_size))
-        #next action
-        self.next_actions = np.zeros((self.max_memory_size, self.N_action))
-        #next gripper action
-        self.next_gripper_actions = np.zeros((self.max_memory_size))
         #current action type
         self.action_types = np.ones(self.max_memory_size)*-1
-        #next reward
-        self.rewards = np.zeros(self.max_memory_size)
-        #next state
-        self.next_depth_states = np.zeros((self.max_memory_size, self.img_size, self.img_size))
-        #current gripper state 
-        self.next_gripper_states = np.zeros(self.max_memory_size)
-        #current yaw angles
-        self.next_yaw_states = np.zeros(self.max_memory_size)
-        #is done in the next state
-        self.dones = np.zeros(self.max_memory_size, dtype = bool)
-        #indicate if this experience is a successful experience
-        self.success_mask = np.zeros(self.max_memory_size, dtype = bool)
         #surprise value
         self.priority = np.ones(self.max_memory_size)
 
@@ -158,21 +106,8 @@ class BufferReplay():
 
         print(f"[BUFFER] grasp_data_size: {self.grasp_data_size} push_data_size: {self.push_data_size}")
 
-        self.depth_states[self.memory_cntr]           = depth_state
-        self.gripper_states[self.memory_cntr]         = gripper_state
-        self.yaw_states[self.memory_cntr]             = yaw_state
-        self.actions[self.memory_cntr]                = action
-        self.gripper_actions[self.memory_cntr]        = gripper_action
-        self.next_actions[self.memory_cntr]           = next_action
-        self.next_gripper_actions[self.memory_cntr]   = next_gripper_action
-        self.action_types[self.memory_cntr]           = action_type
-        self.rewards[self.memory_cntr]                = reward
-        self.next_depth_states[self.memory_cntr]      = next_depth_state
-        self.next_gripper_states[self.memory_cntr]    = next_gripper_state
-        self.next_yaw_states[self.memory_cntr]        = next_yaw_state
-        self.dones[self.memory_cntr]                  = done
-        self.success_mask[self.memory_cntr]           = is_success
-        self.priority[self.memory_cntr]               = priority_
+        self.action_types[self.memory_cntr] = action_type
+        self.priority[self.memory_cntr] = priority_
 
         if is_save_to_dir:
             data_dict = {
@@ -193,7 +128,7 @@ class BufferReplay():
                 'priority': priority,
             }
 
-            self.save_one_exp_to_dir(data_dict)
+            self.add_one_exp_to_dir(data_dict)
 
         #update memory counter
         self.memory_cntr += 1
@@ -207,36 +142,13 @@ class BufferReplay():
         action_index = ((self.action_types == action_type).nonzero())[0]
 
         #get priorities
-        priorities             = self.priority[:max_index][action_index]
+        priorities = self.priority[:max_index][action_index]
 
-        depth_states           = self.depth_states[:max_index][action_index]
-        gripper_states         = self.gripper_states[:max_index][action_index]
-        yaw_states             = self.yaw_states[:max_index][action_index]
-        actions                = self.actions[:max_index][action_index]
-        gripper_actions        = self.gripper_actions[:max_index][action_index]
-        next_actions           = self.next_actions[:max_index][action_index]
-        next_gripper_actions   = self.next_gripper_actions[:max_index][action_index]
-        rewards                = self.rewards[:max_index][action_index]
-        next_depth_states      = self.next_depth_states[:max_index][action_index]
-        next_gripper_states    = self.next_gripper_states[:max_index][action_index]
-        next_yaw_states        = self.next_yaw_states[:max_index][action_index]
-        dones                  = self.dones[:max_index][action_index]
-        success_mask           = self.success_mask[:max_index][action_index]
-
-        return action_index, priorities, depth_states, gripper_states, yaw_states, \
-               actions, gripper_actions, next_actions, next_gripper_actions, \
-               rewards, next_depth_states, next_gripper_states, next_yaw_states, \
-               dones, success_mask
+        return action_index, priorities
 
     def sample_buffer(self, batch_size, action_type):
-        #            0,          1,            2,              3,          4,             
-        # action_index, priorities, depth_states, gripper_states, yaw_states, 
-        #       5,               6,            7,                    8,
-        # actions, gripper_actions, next_actions, next_gripper_actions, 
-        #       9,                10,                  11,              12,
-        # rewards, next_depth_states, next_gripper_states, next_yaw_states,
-        #    13,          14                      
-        # dones, success_mask 
+        #            0,          1             
+        # action_index, priorities
 
         experience = self.get_experience_by_action_type(action_type)
 
@@ -246,63 +158,23 @@ class BufferReplay():
             priorities = copy.copy(experience[1])
         probs = priorities/(priorities.sum())
 
-        batch   = np.random.choice(len(experience[0]), 
-                                   np.min([batch_size, len(experience[0])]),
-                                   replace = False, 
-                                   p       = probs)
+        batch = np.random.choice(len(experience[0]), 
+                                 np.min([batch_size, len(experience[0])]),
+                                 replace = False, 
+                                 p = probs)
 
         if self.is_debug:
             if np.unique(batch).shape[0] != np.min([batch_size, len(experience[0])]):
                 print("[ERROR] np.unique(batch).shape[0] != np.min([batch_size, len(experience[0])]")
 
-        batch_depth_states           = experience[2][batch]
-        batch_gripper_states         = experience[3][batch]
-        batch_yaw_states             = experience[4][batch]
-        batch_actions                = experience[5][batch]
-        batch_gripper_actions        = experience[6][batch]
-        batch_next_actions           = experience[7][batch]
-        batch_next_gripper_actions   = experience[8][batch]
-        batch_rewards                = experience[9][batch]
-        batch_next_depth_states      = experience[10][batch]
-        batch_next_gripper_states    = experience[11][batch]
-        batch_next_yaw_states        = experience[12][batch]
-        batch_dones                  = experience[13][batch]
-        batch_success_mask           = experience[14][batch]
+        self.load_batch_exp_from_dir(experience[0], batch)
         
-        return batch, batch_depth_states, batch_gripper_states, batch_yaw_states, \
-               batch_actions, batch_gripper_actions, batch_next_actions, batch_next_gripper_actions, \
-               batch_rewards, batch_next_depth_states, batch_next_gripper_states, batch_next_yaw_states, \
-               batch_dones, batch_success_mask
+        return self.batch, self.batch_depth_states, self.batch_gripper_states, self.batch_yaw_states, \
+               self.batch_actions, self.batch_gripper_actions, self.batch_next_actions, self.batch_next_gripper_actions, \
+               self.batch_rewards, self.batch_next_depth_states, self.batch_next_gripper_states, self.batch_next_yaw_states, \
+               self.batch_dones, self.batch_success_mask
 
-    def save_all_exp_to_dir(self):
-
-        #get max_ind for sampling range
-        max_index = self.max_memory_size if self.is_full else self.memory_cntr
-
-        for i in range(max_index):
-            data_dict = {
-                'depth_state': self.depth_states[i],
-                'gripper_state': self.gripper_states[i],
-                'yaw_state': self.yaw_states[i],
-                'action': self.actions[i],
-                'gripper_action': self.gripper_actions[i],
-                'next_action': self.next_actions[i],
-                'next_gripper_action': self.next_gripper_actions[i],
-                'action_type': self.action_types[i],
-                'reward': self.rewards[i],
-                'next_depth_state': self.next_depth_states[i],
-                'next_gripper_state': self.next_gripper_states[i],
-                'next_yaw_state': self.next_yaw_states[i],
-                'done': self.dones[i],
-                'success_mask':  self.success_mask[i],
-                'priority': self.priority[i],
-            }
-
-            file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{i}" + ".pkl")
-            with open(file_name, 'wb') as file:
-                pickle.dump(data_dict, file)
-
-    def save_one_exp_to_dir(self, data_dict):
+    def add_one_exp_to_dir(self, data_dict):
 
         if self.data_length >= self.max_memory_size:
             self.data_length  = 0
@@ -315,15 +187,89 @@ class BufferReplay():
 
             self.data_length += 1
 
+    def update_one_exp_to_dir(self, data_dict, sample_index):
+
+        file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{sample_index}" + ".pkl")
+
+        with open(file_name, 'wb') as file:
+            pickle.dump(data_dict, file)
+
+    def load_batch_exp_from_dir(self, action_index, batch_index, checkpt_dir = None):
+
+        if checkpt_dir is None:
+            checkpt_dir = self.checkpt_dir
+
+        #get experience directory
+        exp_dir = os.listdir(checkpt_dir)
+        exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
+        sort_exp_dir = np.array(exp_dir)[exp_sort_index]
+
+        #get batch size
+        batch_size = len(batch_index)
+        
+        #initialise batch index
+        self.batch = np.ones(batch_size, dtype=int)*-1
+        #current depth state
+        self.batch_depth_states = np.zeros((batch_size, self.img_size, self.img_size))
+        #current gripper state 
+        self.batch_gripper_states = np.zeros(batch_size)
+        #current yaw angles
+        self.batch_yaw_states = np.zeros(batch_size)
+        #current action
+        self.batch_actions = np.zeros((batch_size, self.N_action))
+        #current gripper action
+        self.batch_gripper_actions = np.zeros((batch_size))
+        #next action
+        self.batch_next_actions = np.zeros((batch_size, self.N_action))
+        #next gripper action
+        self.batch_next_gripper_actions = np.zeros((batch_size))
+        # current action type
+        self.batch_action_types = np.ones(batch_size)*-1
+        #next reward
+        self.batch_rewards = np.zeros(batch_size)
+        #next state
+        self.batch_next_depth_states = np.zeros((batch_size, self.img_size, self.img_size))
+        #current gripper state 
+        self.batch_next_gripper_states = np.zeros(batch_size)
+        #current yaw angles
+        self.batch_next_yaw_states = np.zeros(batch_size)
+        #is done in the next state
+        self.batch_dones = np.zeros(batch_size, dtype = bool)
+        #indicate if this experience is a successful experience
+        self.batch_success_mask = np.zeros(batch_size, dtype = bool)
+
+        for i in range(len(batch_index)):
+            self.batch[i] = action_index[batch_index[i]]
+            file_name = os.path.join(checkpt_dir, sort_exp_dir[self.batch[i]])
+            with open(file_name, 'rb') as file:
+                data_dict = pickle.load(file)
+
+                self.batch_depth_states[i] = data_dict['depth_state']   
+                self.batch_gripper_states[i] = data_dict['gripper_state']
+                self.batch_yaw_states[i] = data_dict['yaw_state']   
+                self.batch_actions[i] = data_dict['action']            
+                self.batch_gripper_actions[i] = data_dict['gripper_action']   
+                self.batch_next_actions[i] = data_dict['next_action']            
+                self.batch_next_gripper_actions[i] = data_dict['next_gripper_action'] 
+                self.batch_action_types[i] = data_dict['action_type']      
+                self.batch_rewards[i] = data_dict['reward']            
+                self.batch_next_depth_states[i] = data_dict['next_depth_state'] 
+                self.batch_next_gripper_states[i] = data_dict['next_gripper_state']
+                self.batch_next_yaw_states[i] = data_dict['next_yaw_state']
+                self.batch_dones[i] = data_dict['done']              
+                self.batch_success_mask[i] = data_dict['success_mask'] 
+
     def load_exp_from_dir(self, checkpt_dir = None):
 
         if checkpt_dir is None:
             checkpt_dir = self.checkpt_dir
 
         exp_dir = os.listdir(checkpt_dir)
+        exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
+        sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
         #check the data size in hardware storage
-        data_length = len(exp_dir)
+        data_length = len(sort_exp_dir)
 
         print(f"[LOAD BUFFER] data_length: {data_length}")
         #reinitialise memory size if the max memory size is less than data_length
@@ -337,25 +283,12 @@ class BufferReplay():
             self.memory_cntr     = data_length
 
         for i in range(data_length):
-            file_name = os.path.join(checkpt_dir, exp_dir[i])
+            file_name = os.path.join(checkpt_dir, sort_exp_dir[i])
             with open(file_name, 'rb') as file:
                 data_dict = pickle.load(file)
 
-                self.depth_states[i]           = data_dict['depth_state']   
-                self.gripper_states[i]         = data_dict['gripper_state']
-                self.yaw_states[i]             = data_dict['yaw_state']   
-                self.actions[i]                = data_dict['action']            
-                self.gripper_actions[i]        = data_dict['gripper_action']   
-                self.next_actions[i]           = data_dict['next_action']            
-                self.next_gripper_actions[i]   = data_dict['next_gripper_action'] 
-                self.action_types[i]           = data_dict['action_type']      
-                self.rewards[i]                = data_dict['reward']            
-                self.next_depth_states[i]      = data_dict['next_depth_state'] 
-                self.next_gripper_states[i]    = data_dict['next_gripper_state']
-                self.next_yaw_states[i]        = data_dict['next_yaw_state']
-                self.dones[i]                  = data_dict['done']              
-                self.success_mask[i]           = data_dict['success_mask'] 
-                self.priority[i]               = data_dict['priority']  
+                self.action_types[i] = data_dict['action_type']      
+                self.priority[i] = data_dict['priority']  
 
                 if self.action_types[i] == constants.GRASP:
                     self.have_grasp_data = True
@@ -380,9 +313,63 @@ class BufferReplay():
                     print("[ERROR] actor_loss.shape[1] != critic_loss.shape[1]")
 
         for i, sample_ind in enumerate(sample_inds):
+
+            #update priority
             if actor_loss is not None:
-                self.priority[sample_ind]  = np.abs(actor_loss[i] + self.sm_c)**self.alpha
+                self.priority[sample_ind] = np.abs(actor_loss[i] + self.sm_c)**self.alpha
             else:
-                self.priority[sample_ind]  = np.abs(critic_loss[i] + self.sm_c)**self.alpha
+                self.priority[sample_ind] = np.abs(critic_loss[i] + self.sm_c)**self.alpha
+            
+            if self.batch_action_types[0] != self.batch_action_types[i]:
+                print("[ERROR] not the same action type")
+
+            #update experience to harddisk
+            data_dict = {
+                'depth_state': self.batch_depth_states[i],
+                'gripper_state': self.batch_gripper_states[i],
+                'yaw_state': self.batch_yaw_states[i],
+                'action': self.batch_actions[i],
+                'gripper_action': self.batch_gripper_actions[i],
+                'next_action': self.batch_next_actions[i],
+                'next_gripper_action': self.batch_next_gripper_actions[i],
+                'action_type': self.batch_action_types[i],
+                'reward': self.batch_rewards[i],
+                'next_depth_state': self.batch_next_depth_states[i],
+                'next_gripper_state': self.batch_next_gripper_states[i],
+                'next_yaw_state': self.batch_next_yaw_states[i],
+                'done': self.batch_dones[i],
+                'success_mask':  self.batch_success_mask[i],
+                'priority': self.priority[sample_ind],
+            }
+
+            self.update_one_exp_to_dir(data_dict, sample_ind)
 
         print("[SUCCESS] update experience priorities")
+
+    # def save_all_exp_to_dir(self):
+
+    #     #get max_ind for sampling range
+    #     max_index = self.max_memory_size if self.is_full else self.memory_cntr
+
+    #     for i in range(max_index):
+    #         data_dict = {
+    #             'depth_state': self.depth_states[i],
+    #             'gripper_state': self.gripper_states[i],
+    #             'yaw_state': self.yaw_states[i],
+    #             'action': self.actions[i],
+    #             'gripper_action': self.gripper_actions[i],
+    #             'next_action': self.next_actions[i],
+    #             'next_gripper_action': self.next_gripper_actions[i],
+    #             'action_type': self.action_types[i],
+    #             'reward': self.rewards[i],
+    #             'next_depth_state': self.next_depth_states[i],
+    #             'next_gripper_state': self.next_gripper_states[i],
+    #             'next_yaw_state': self.next_yaw_states[i],
+    #             'done': self.dones[i],
+    #             'success_mask':  self.success_mask[i],
+    #             'priority': self.priority[i],
+    #         }
+
+    #         file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{i}" + ".pkl")
+    #         with open(file_name, 'wb') as file:
+    #             pickle.dump(data_dict, file)

@@ -57,7 +57,6 @@ class Agent():
                  max_action_taken = 50, #max number of action taken allowable for one episode
                  max_stage1_episode = 200, #define the max number of episodes for stage 1
                  success_rate_threshold = 0.7, #define the threshold for switching to full training mode
-                 save_all_exp_interval = 20, #mainly used for update all experience's priority
                  max_result_window = 500, #the maximum record length for low-level action networks
                  max_result_window_hld = 250, #the maximum record length for high-level decision network
                  max_result_window_eval = 100, #the maximum record length for high-level decision network (in eval)
@@ -172,9 +171,6 @@ class Agent():
 
         #define if the agent is in evaluation mode
         self.is_eval = None
-
-        #initialise save interval
-        self.save_all_exp_interval = save_all_exp_interval
 
         #initialise max step per episode
         self.max_action_taken = max_action_taken
@@ -739,21 +735,6 @@ class Agent():
 
             self.is_env_reset = True
             print("[WARN] stop executing this action!")
-
-    def is_save_all_exp(self, episode, max_episode):
-        if not self.is_eval and ((episode == max_episode - 1 or (episode % self.save_all_exp_interval) == 0)):
-            
-            if self.enable_bc:
-                self.buffer_replay_expert.save_all_exp_to_dir()
-                print("[SUCCESS] update all bc experience priorities")
-            if self.enable_rl_actor or self.enable_rl_critic:
-                self.buffer_replay.save_all_exp_to_dir()
-                print("[SUCCESS] update all rl experience priorities")
-            if self.is_full_train:
-                self.buffer_replay_hld.save_all_exp_to_dir()
-                print("[SUCCESS] update all hld-net experience priorities")
-
-            print("[SUCCESS] update all experience priorities")
 
     def is_transform_to_full_train(self):
         if not self.is_eval:
@@ -1760,9 +1741,6 @@ class Agent():
 
             #save hld data
             self.record_hld_data()
-
-            #check if save all experience to harddisk
-            self.is_save_all_exp(self.episode, max_episode)
 
             #update episode
             self.episode += 1
