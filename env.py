@@ -20,7 +20,7 @@ class Env():
                  N_step_grasp             =  constants.N_STEP_GRASP_DEMO, 
                  N_step_push              =  constants.N_STEP_PUSH_DEMO,
                  can_execute_action_thres =  0.010,
-                 push_reward_thres        =  0.010,
+                 push_reward_thres        =  0.005,
                  ground_collision_thres   =  0.00,
                  lift_z_after_grasp       =  0.05,
                  return_home_pos_thres    =  0.025,
@@ -682,7 +682,7 @@ class Env():
             delta_distance = np.linalg.norm(np.array(self.item_data_dict['c_pose'][i][0:3]) - np.array(self.item_data_dict['p_pose'][i][0:3]))
 
             #ensure the item has been pushed significantly and the item is close to another item
-            if delta_distance > self.push_reward_thres:
+            if delta_distance >= self.push_reward_thres:
                 if self.is_debug:
                     print(f'delta_distance {i}: {delta_distance}')
                 if self.item_data_dict['min_d'][i] <= constants.MIN_DIST_PUSH:

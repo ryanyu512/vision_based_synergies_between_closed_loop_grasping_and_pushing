@@ -29,9 +29,9 @@ N_obj   = 5
 env = Env(obj_dir, N_obj, workspace_lim, cluttered_mode= False, is_debug = False)
 
 agent = Agent(env, 
-              max_memory_size = 20000, 
+              max_memory_size = 25000, 
               max_memory_size_rl = 1,
-              max_memory_size_hld = 20000,
+              max_memory_size_hld = 25000,
               is_debug = False, 
               N_batch = 512, 
               N_batch_hld = 512, 
@@ -43,9 +43,8 @@ agent = Agent(env,
               max_result_window = 500,
               max_result_window_hld = 250,
               max_result_window_eval = 100,
-              max_stage1_episode = 200,
-              save_all_exp_interval = 100)
+              max_stage1_episode = 200)
 
-agent.interact(max_episode = 3000, 
+agent.interact(max_episode = 2000, 
                hld_mode    = constants.HLD_MODE,
                is_eval     = False)

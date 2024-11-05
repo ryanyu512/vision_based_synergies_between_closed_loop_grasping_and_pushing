@@ -856,6 +856,9 @@ class Agent():
 
         self.soft_update(self.hld_net, self.hld_net_target, self.tau_hld)
 
+        self.buffer_replay_hld.update_buffer(exp[0], 
+                                             nn.MSELoss(reduction = 'none')(q_values, target_q_values).to(torch.device('cpu')).detach().numpy()[0])
+
         if self.is_debug:
             print('[SUCCESS] online update')
 
@@ -886,8 +889,12 @@ class Agent():
             print('[SUCCESS] store transition experience for low-level action')   
 
         #update networks
-        self.online_update(action_type = self.action_type)
+        print("[UPDATE] GRASP NETWORK")
+        self.online_update(action_type = constants.GRASP)
 
+        print("[UPDATE] PUSH NETWORK")
+        self.online_update(action_type = constants.PUSH)
+        
         #save low-level network model
         self.save_models(self.action_type, self.episode_done, is_expert)
 
