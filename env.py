@@ -1475,7 +1475,8 @@ class Env():
                                  push_max_ori   = constants.PUSH_MAX_ACTION[3], 
                                  min_distance_threshold = constants.MIN_DIST_PUSH,
                                  offset_z      = 0.050,
-                                 offset_z_push = 0.050):
+                                 offset_z_push = 0.050,
+                                 is_continous_output = True):
 
         #initialise move delta
         delta_move_grasp = []
@@ -1535,41 +1536,104 @@ class Env():
                 #compute linear movement N_step
                 #offset the delta to ensure the gripper tip is not in collision with the ground/target item
                 delta_lin = sorted_delta_vecs[i] + np.array([0,0,offset_z]) 
-                delta_lin_norm  = np.linalg.norm(delta_lin)
-                lin_unit_vector = delta_lin/delta_lin_norm
 
                 #compute angular movement N_step
                 _, _, delta_ori = self.compute_guidance_grasp_ang(item_ind, bbox_items)
 
-                #get a unified N_step
-                N_step = self.N_step_grasp
+                if is_continous_output:
+                    #get a unified N_step
+                    N_step = self.N_step_grasp
 
-                #compute magnitude of each delta move
-                step_mag_lin = np.linspace(0, delta_lin_norm, N_step, endpoint = True)
-                step_mag_lin = step_mag_lin[1:] - step_mag_lin[0:-1]
+                    #compute magnitude of each delta move
+                    delta_lin_norm  = np.linalg.norm(delta_lin)
+                    lin_unit_vector = delta_lin/delta_lin_norm
 
-                step_mag_ori = np.linspace(0, delta_ori, N_step, endpoint = True)
-                step_mag_ori = step_mag_ori[1:] - step_mag_ori[0:-1]
+                    step_mag_lin = np.linspace(0, delta_lin_norm, N_step, endpoint = True)
+                    step_mag_lin = step_mag_lin[1:] - step_mag_lin[0:-1]
 
-                for j in range(len(step_mag_lin)):
-                    delta_move_grasp.append([lin_unit_vector[0]*step_mag_lin[j], 
-                                             lin_unit_vector[1]*step_mag_lin[j],
-                                             lin_unit_vector[2]*step_mag_lin[j],
-                                             step_mag_ori[j],
-                                             1, 0]) #open gripper
+                    step_mag_ori = np.linspace(0, delta_ori, N_step, endpoint = True)
+                    step_mag_ori = step_mag_ori[1:] - step_mag_ori[0:-1]
 
-                if step_mag_lin[0] > constants.MAX_ACTION[0]:
-                    print("[ERROR] step_mag_lin[0] > constants.MAX_ACTION[0]")
-                elif step_mag_ori[0] > constants.MAX_ACTION[-1]:
-                    print("[ERROR] step_mag_ori[0] >constants.MAX_ACTION[-1]")
+                    for j in range(len(step_mag_lin)):
+                        delta_move_grasp.append([lin_unit_vector[0]*step_mag_lin[j], 
+                                                 lin_unit_vector[1]*step_mag_lin[j],
+                                                 lin_unit_vector[2]*step_mag_lin[j],
+                                                 step_mag_ori[j],
+                                                 1, 0]) #open gripper
 
-                print(f"[GRASP GUIDANCE] home2grasp- linear: {step_mag_lin[0]}, angular {np.rad2deg(step_mag_ori[0])}")
+                    if step_mag_lin[0] > constants.MAX_ACTION[0]:
+                        print("[ERROR] step_mag_lin[0] > constants.MAX_ACTION[0]")
+                    elif step_mag_ori[0] > constants.MAX_ACTION[-1]:
+                        print("[ERROR] step_mag_ori[0] >constants.MAX_ACTION[-1]")
 
-                #step4: [GRASP] open gripper and move vertically down by a constant height => close gripper
-                # delta_move.append([0, 0, -offset_z*0.9, 0, 0, 1]) #close gripper
-                delta_move_grasp.append([0, 0, -offset_z*0.7, 0., 0, 1]) #close gripper
+                    print(f"[GRASP GUIDANCE] home2grasp- linear: {step_mag_lin[0]}, angular {np.rad2deg(step_mag_ori[0])}")
 
-                # return delta_move, target_item_pos, constants.GRASP
+                    #step4: [GRASP] open gripper and move vertically down by a constant height => close gripper
+                    delta_move_grasp.append([0, 0, -offset_z*0.7, 0., 0, 1]) #close gripper
+                else:
+                    
+                    #compute N_step for 3D movement and orientation
+                    N_step_x = np.ceil(np.abs(delta_lin[0])/constants.GRASP_MAX_ACTION_Q[0])
+                    N_step_y = np.ceil(np.abs(delta_lin[1])/constants.GRASP_MAX_ACTION_Q[1])
+                    N_step_z = np.ceil(np.abs(delta_lin[2])/constants.GRASP_MAX_ACTION_Q[2])
+                    N_step_yaw = np.ceil(np.abs(delta_ori)/constants.GRASP_MAX_ACTION_Q[3])
+
+                    N_step = np.max(np.array([N_step_x, N_step_y, N_step_z, N_step_yaw]))
+
+                    print(f"N_step_x: {N_step_x}, N_step_y: {N_step_y}, N_step_z: {N_step_z}, N_step_yaw: {N_step_yaw}, N_step: {N_step}")
+
+                    #compute which step should move
+                    x_index = np.linspace(0, int(N_step), int(N_step_x), endpoint = True, dtype = int)
+                    y_index = np.linspace(0, int(N_step), int(N_step_y), endpoint = True, dtype = int)
+                    z_index = np.linspace(0, int(N_step), int(N_step_z), endpoint = True, dtype = int)
+                    yaw_index = np.linspace(0, int(N_step), int(N_step_yaw), endpoint = True, dtype = int)
+
+                    #compute movement
+                    adj_index = [x_index, 
+                                 y_index, 
+                                 z_index, 
+                                 yaw_index]
+                    adj_count = [0]*4
+
+                    print(f"adj_index: {adj_index}")
+
+                    gripper_tip_pos_adjust = copy.copy(gripper_tip_pos)
+                    delta_4d = np.array([delta_lin[0], delta_lin[1], delta_lin[2], delta_ori])
+                    for j in range(int(N_step)):
+
+                        movement = [0]*6; movement[-2] = 1
+
+                        for k in range(4):
+                            if adj_count[k] < len(adj_index[k]) and j == adj_index[k][adj_count[k]]:
+                                if delta_4d[k] > 0:
+                                    movement[k] = constants.GRASP_MAX_ACTION_Q[k]
+                                elif delta_4d[k] < 0:
+                                    movement[k] = -constants.GRASP_MAX_ACTION_Q[k]
+                                else:
+                                    movement[k] = 0.
+                                
+                                adj_count[k] += 1
+
+                            if k <= 2:
+                                gripper_tip_pos_adjust[k] += movement[k]
+
+                        delta_move_grasp.append(movement) #open gripper
+
+                    while True:
+
+                        movement = [0]*6
+                        movement[2] = -constants.GRASP_MAX_ACTION_Q[2]
+
+                        if gripper_tip_pos_adjust[2] > constants.GRASP_HEIGHT:
+                            movement[-2] = 1
+                        else:
+                            movement[-1] = 1
+                        
+                        delta_move_grasp.append(movement)
+
+                        if movement[-1] == 1:
+                            break
+                        gripper_tip_pos_adjust[2] += movement[2]
 
             if not is_get_push_target and min_distance <= min_distance_threshold:
 
@@ -1606,45 +1670,39 @@ class Env():
                 _, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
                 delta_yaw = target_yaw_ang - gripper_tip_ori[2]
 
-                #unify N_step
-                N_step = self.N_step_push
+                if is_continous_output:
+                    #unify N_step
+                    N_step = self.N_step_push
 
-                #compute step magnitude of each step
-                step_mag_lin_home2start = np.linspace(0, push_home2start_norm, N_step, endpoint = True)
-                step_mag_lin_home2start = step_mag_lin_home2start[1:] - step_mag_lin_home2start[0:-1]
-        
-                step_mag_ori_home2start = np.linspace(0, delta_yaw, N_step, endpoint = True)
-                step_mag_ori_home2start = step_mag_ori_home2start[1:] - step_mag_ori_home2start[0:-1]
+                    #compute step magnitude of each step
+                    step_mag_lin_home2start = np.linspace(0, push_home2start_norm, N_step, endpoint = True)
+                    step_mag_lin_home2start = step_mag_lin_home2start[1:] - step_mag_lin_home2start[0:-1]
+            
+                    step_mag_ori_home2start = np.linspace(0, delta_yaw, N_step, endpoint = True)
+                    step_mag_ori_home2start = step_mag_ori_home2start[1:] - step_mag_ori_home2start[0:-1]
 
-                #move to the point on top of the push start point
-                for j in range(len(step_mag_lin_home2start)):
-                    delta_move_push.append([push_home2start_unit_vec[0]*step_mag_lin_home2start[j], 
-                                            push_home2start_unit_vec[1]*step_mag_lin_home2start[j],
-                                            push_home2start_unit_vec[2]*step_mag_lin_home2start[j],
-                                            step_mag_ori_home2start[j],
-                                            0, 1])
-                
-                #move downward to reach the push start point
-                if be4_push_point[2] + offset_z_push*0.5 < constants.PUSH_HEIGHT:
-                    delta_move_push.append([0,0,-offset_z_push*0.5, 0, 0, 1]) #+1
+                    #move to the point on top of the push start point
+                    for j in range(len(step_mag_lin_home2start)):
+                        delta_move_push.append([push_home2start_unit_vec[0]*step_mag_lin_home2start[j], 
+                                                push_home2start_unit_vec[1]*step_mag_lin_home2start[j],
+                                                push_home2start_unit_vec[2]*step_mag_lin_home2start[j],
+                                                step_mag_ori_home2start[j],
+                                                0, 1])
+                    
+                    #move downward to reach the push start point
+                    if be4_push_point[2] + offset_z_push*0.5 < constants.PUSH_HEIGHT:
+                        delta_move_push.append([0,0,-offset_z_push*0.5, 0, 0, 1]) #+1
+                    else:
+                        down_z = be4_push_point[2] + offset_z_push - constants.PUSH_HEIGHT
+                        delta_move_push.append([0,0,-down_z, 0, 0, 1])
+                    
+                    if step_mag_lin_home2start[0] > constants.PUSH_MAX_ACTION[0]:
+                        print("[ERROR] step_mag_lin_home2start[0] > constants.PUSH_MAX_ACTION[0]")
+                    elif step_mag_ori_home2start[0] > constants.PUSH_MAX_ACTION[-1]:
+                        print("[ERROR] step_mag_ori_home2start[0] > constants.PUSH_MAX_ACTION[-1]")
+
+                    print(f"[PUSH GUIDANCE] home2start- linear: {step_mag_lin_home2start[0]}, angular: {np.rad2deg(step_mag_ori_home2start[0])}")
                 else:
-                    down_z = be4_push_point[2] + offset_z_push - constants.PUSH_HEIGHT
-                    delta_move_push.append([0,0,-down_z, 0, 0, 1])
-
-                # #push item
-                # delta_move.append([push_start2closest_unit_vec[0]*push_max_move, 
-                #                    push_start2closest_unit_vec[1]*push_max_move,
-                #                    push_start2closest_unit_vec[2]*push_max_move,
-                #                    0,
-                #                    0, 1]) #close gripper #+1
-                
-                if step_mag_lin_home2start[0] > constants.PUSH_MAX_ACTION[0]:
-                    print("[ERROR] step_mag_lin_home2start[0] > constants.PUSH_MAX_ACTION[0]")
-                elif step_mag_ori_home2start[0] > constants.PUSH_MAX_ACTION[-1]:
-                    print("[ERROR] step_mag_ori_home2start[0] > constants.PUSH_MAX_ACTION[-1]")
-
-                print(f"[PUSH GUIDANCE] home2start- linear: {step_mag_lin_home2start[0]}, angular: {np.rad2deg(step_mag_ori_home2start[0])}")
-
-                # return delta_move, target_item_pos, constants.PUSH
+                    
 
         return delta_move_grasp, delta_move_push, target_item_pos_grasp, target_item_pos_push

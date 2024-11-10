@@ -444,17 +444,19 @@ class Agent():
         #init hld experience
         self.init_hld_exp()
 
-    def init_interact(self, is_eval, hld_mode):
+    def init_interact(self, is_eval, lla_mode, hld_mode):
 
         #set evaluation mode and hld mode
         if is_eval:
             self.is_eval = is_eval
             self.is_full_train = False
             self.hld_mode = hld_mode
+            self.lla_mode = lla_mode
         else:
             self.is_eval = is_eval
             self.is_full_train = False
             self.hld_mode = constants.HLD_MODE
+            self.lla_mode = lla_mode
 
             #initialise buffer replay
             self.buffer_replay        = BufferReplay(max_memory_size = self.max_memory_size_rl, 
@@ -489,7 +491,10 @@ class Agent():
     def get_hld_decision(self):
 
         #get demonstration action of pushing and grasping
-        delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
+        if self.lla_mode == constants.BC_ONLY:
+            delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation()
+        elif self.lla_mode == constants.BC_RL:
+            delta_moves_grasp, delta_moves_push, _, _ = self.env.demo_guidance_generation(is_continous_output = False)
 
         #get raw data
         _, hld_depth_img = self.env.get_rgbd_data()
@@ -1564,10 +1569,11 @@ class Agent():
     def interact(self,
                  max_episode = 1,
                  hld_mode = constants.HLD_MODE,
+                 lla_mode = constants.BC_ONLY,
                  is_eval = False):
 
         #initialise interact 
-        self.init_interact(is_eval, hld_mode)
+        self.init_interact(is_eval, lla_mode, hld_mode)
 
         while self.episode < max_episode:
 

@@ -15,27 +15,27 @@ COLOR_SPACE = np.asarray([[78.0, 121.0, 167.0],   # blue
                           [255, 157, 167]])/255.0 # pink
 
 #initialise gripper status
-GRIPPER_FULL_CLOSE         = 0
-GRIPPER_FULL_OPEN          = 1
+GRIPPER_FULL_CLOSE = 0
+GRIPPER_FULL_OPEN = 1
 GRIPPER_NON_CLOSE_NON_OPEN = 2
-GRIPPER_CANNOT_OPERATE     = 3
+GRIPPER_CANNOT_OPERATE = 3
  
 #initialise gripper action
-OPEN_GRIPPER  = 0
+OPEN_GRIPPER = 0
 CLOSE_GRIPPER = 1
 
 #initialise action type
 GRASP = 0
-PUSH  = 1
+PUSH = 1
 
 #define the min. distance needs to be pushed
 MIN_DIST_PUSH = 0.035
 
 #initialise number of step for grasping/pushing
 N_STEP_GRASP_DEMO = 7
-N_STEP_PUSH_DEMO  = 7
+N_STEP_PUSH_DEMO = 7
 N_STEP_GRASP = 10
-N_STEP_PUSH  = 10
+N_STEP_PUSH = 10
 
 #initialise home pose 
 HOME_POSE = [-0.11120, 
@@ -45,14 +45,17 @@ HOME_POSE = [-0.11120,
 
 #initialise working space center
 WORK_SPACE_CENTER = [-0.110, 0.560, 0.001]
-WORK_SPACE_DIM    = [0.30, 0.25, 0.]
+WORK_SPACE_DIM = [0.30, 0.25, 0.]
 
 #max actions for the networks
-MAX_ACTION      = [0.07, 0.07, 0.07, np.deg2rad(30.)]
+MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(30.)]
 PUSH_MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(45.)]
 
+GRASP_MAX_ACTION_Q = [0.01, 0.01, 0.01, np.deg2rad(2.5)]
+PUSH_MAX_ACTION_Q = [0.01, 0.01, 0.01, np.deg2rad(2.5)]
+
 #define push height
-PUSH_HEIGHT  = 0.05
+PUSH_HEIGHT = 0.05
 GRASP_HEIGHT = 0.05
 
 #define the maximum possible distance
@@ -65,8 +68,11 @@ MAX_POSSIBLE_DIST = MAX_POSSIBLE_DIST**0.5
 
 print(f"[MAX_POSSIBLE_DIST]: {MAX_POSSIBLE_DIST}")
 
-#define HLD mode
-
-HLD_MODE       = 0
-GRASP_ONLY     = 1
+#define high-level decision mode
+HLD_MODE = 0
+GRASP_ONLY = 1
 SEQ_GRASP_PUSH = 2
+
+#define low-level action training mode
+BC_ONLY = 0
+BC_RL = 1
