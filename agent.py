@@ -312,7 +312,8 @@ class Agent():
         self.rewards.append(reward)
         self.action_dones.append(action_done)
 
-        self.priorities.append(priority.to(torch.device('cpu')).detach().numpy())
+        print(priority)
+        self.priorities.append(priority.to(torch.device('cpu')).detach().numpy() if priority is not None else priority)
 
         if self.is_debug:
             print("[SUCCESS] append transition experience")
@@ -642,6 +643,7 @@ class Agent():
 
     def compute_priority(self, current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, action_est, action_target):
 
+        critic_loss = None
         if current_q1 is not None:
             next_q   = torch.min(next_q1, next_q2)  
             target_q = reward + (1 - action_done) * self.gamma * next_q
@@ -657,7 +659,7 @@ class Agent():
             priority = actor_loss
         else:
             actor_loss = None
-            priority = critic_loss
+            priority = critic_loss 
             
         print(f"[LOSS] actor_loss: {actor_loss}")
 
@@ -1003,14 +1005,21 @@ class Agent():
             if not is_expert and (not self.enable_rl_actor and not self.enable_rl_critic):
                 continue
 
-            buffer_replay.store_transition(self.depth_states[i], self.gripper_states[i], self.yaw_states[i],
-                                            self.actions[i], self.gripper_actions[i], 
-                                            self.next_actions[i], self.next_gripper_actions[i],
-                                            self.action_types[i], self.rewards[i], 
-                                            self.next_depth_states[i], self.next_gripper_states[i], self.next_yaw_states[i],
-                                            self.action_dones[i], 
-                                            True if (np.array(self.rewards) > 0).sum() > 0 else False,
-                                            self.priorities[i]) 
+            buffer_replay.store_transition(self.depth_states[i], 
+                                           self.gripper_states[i], 
+                                           self.yaw_states[i],
+                                           self.actions[i], 
+                                           self.gripper_actions[i], 
+                                           self.next_actions[i], 
+                                           self.next_gripper_actions[i],
+                                           self.action_types[i], 
+                                           self.rewards[i], 
+                                           self.next_depth_states[i], 
+                                           self.next_gripper_states[i], 
+                                           self.next_yaw_states[i],
+                                           self.action_dones[i], 
+                                           True if (np.array(self.rewards) > 0).sum() > 0 else False,
+                                           self.priorities[i]) 
         
         if self.is_debug:
             print('[SUCCESS] store transition experience for low-level action')   
@@ -1524,6 +1533,7 @@ class Agent():
                         next_action, next_normalised_action = next_action_est, next_normalised_action_est
                     
                     #compute priority for experience
+                    # if self.is_eval:
                     priority = self.compute_priority(None, None, None, None, reward, action_done, is_expert, normalised_action_est, normalised_action)
 
                     # store experience during executing low-level action
