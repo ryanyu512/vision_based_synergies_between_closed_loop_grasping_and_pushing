@@ -71,12 +71,18 @@ class BufferReplay():
         self.priority = np.ones(self.max_memory_size)
 
     def store_transition(self, 
-                         depth_state, gripper_state, yaw_state, 
-                         action, gripper_action, 
-                         next_action, next_gripper_action,
+                         depth_state, 
+                         gripper_state, 
+                         yaw_state, 
+                         action, 
+                         gripper_action, 
+                         next_action, 
+                         next_gripper_action,
                          action_type,reward, 
-                         next_depth_state, next_gripper_state, 
-                         next_yaw_state, done, 
+                         next_depth_state, 
+                         next_gripper_state, 
+                         next_yaw_state, 
+                         done, 
                          is_success, 
                          priority,
                          is_save_to_dir = True):
@@ -302,15 +308,15 @@ class BufferReplay():
 
     def update_buffer(self, sample_inds, actor_loss, critic_loss):
 
-        if self.is_debug:
-            if actor_loss is not None and len(actor_loss.shape) != len(critic_loss.shape):
-                print("[ERROR] len(actor_loss.shape) != len(critic_loss.shape)")
-                print("actor_loss.shape: ", actor_loss.shape, "critic_loss.shape: ", critic_loss.shape)
-            else:
-                if actor_loss is not None and actor_loss.shape[0] != critic_loss.shape[0]:
-                    print("[ERROR] actor_loss.shape[0] != critic_loss.shape[0]")
-                elif actor_loss is not None and actor_loss.shape[1] != critic_loss.shape[1]:
-                    print("[ERROR] actor_loss.shape[1] != critic_loss.shape[1]")
+        # if self.is_debug:
+        #     if actor_loss is not None and len(actor_loss.shape) != len(critic_loss.shape):
+        #         print("[ERROR] len(actor_loss.shape) != len(critic_loss.shape)")
+        #         print("actor_loss.shape: ", actor_loss.shape, "critic_loss.shape: ", critic_loss.shape)
+        #     else:
+        #         if actor_loss is not None and actor_loss.shape[0] != critic_loss.shape[0]:
+        #             print("[ERROR] actor_loss.shape[0] != critic_loss.shape[0]")
+        #         elif actor_loss is not None and actor_loss.shape[1] != critic_loss.shape[1]:
+        #             print("[ERROR] actor_loss.shape[1] != critic_loss.shape[1]")
 
         for i, sample_ind in enumerate(sample_inds):
 
@@ -345,31 +351,3 @@ class BufferReplay():
             self.update_one_exp_to_dir(data_dict, sample_ind)
 
         print("[SUCCESS] update experience priorities")
-
-    # def save_all_exp_to_dir(self):
-
-    #     #get max_ind for sampling range
-    #     max_index = self.max_memory_size if self.is_full else self.memory_cntr
-
-    #     for i in range(max_index):
-    #         data_dict = {
-    #             'depth_state': self.depth_states[i],
-    #             'gripper_state': self.gripper_states[i],
-    #             'yaw_state': self.yaw_states[i],
-    #             'action': self.actions[i],
-    #             'gripper_action': self.gripper_actions[i],
-    #             'next_action': self.next_actions[i],
-    #             'next_gripper_action': self.next_gripper_actions[i],
-    #             'action_type': self.action_types[i],
-    #             'reward': self.rewards[i],
-    #             'next_depth_state': self.next_depth_states[i],
-    #             'next_gripper_state': self.next_gripper_states[i],
-    #             'next_yaw_state': self.next_yaw_states[i],
-    #             'done': self.dones[i],
-    #             'success_mask':  self.success_mask[i],
-    #             'priority': self.priority[i],
-    #         }
-
-    #         file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{i}" + ".pkl")
-    #         with open(file_name, 'wb') as file:
-    #             pickle.dump(data_dict, file)

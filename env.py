@@ -604,7 +604,7 @@ class Env():
         self.sim.setObjectPosition(handle, pos,ref_frame)
         self.sim.setObjectOrientation(handle, ori, ref_frame)
     
-    def grasp_reward(self):
+    def grasp_reward(self, is_grasped):
 
         #check if the item is grasped firmly
         is_success_grasp = False
@@ -613,7 +613,9 @@ class Env():
 
         print(f"[GRASP DISTANCE] {reward}")
 
-        if self.gripper_status == constants.GRIPPER_NON_CLOSE_NON_OPEN:
+        #[NOTE: 11/11/2024]: change from detecting gripper status to using a flag is_grasped
+        # if self.gripper_status == constants.GRIPPER_NON_CLOSE_NON_OPEN:
+        if is_grasped:
             #lift up the item for testing if the grasping is successful
             self.move(delta_pos = [0, 0, self.lift_z_after_grasp],
                       delta_ori = [0, 0, 0])
@@ -653,13 +655,14 @@ class Env():
             if is_success_grasp:
                 reward += 1.0
             else:
-                reward += 0.0
+                #CHANGE [NOTE 11/11/2024]: penalise incorrect grasping
+                reward +=-1.0
 
         print(f"[GRASP REWARD] R: {reward}")
 
         return reward, is_success_grasp
 
-    def push_reward(self, gripper_pos):
+    def push_reward(self, gripper_pos, is_pushed):
 
         #[NOTE 25 Aug 2024]: push reward should encourage the robot push items that are cluttered together
 
@@ -672,6 +675,7 @@ class Env():
         push_non_clustered_item = False
         for i, obj_handle in enumerate(self.item_data_dict['handle']):
 
+            #compute distance between gripper tip center and item center
             d_gripper2item =  np.linalg.norm(np.array(self.item_data_dict['c_pose'][i][0:3]) - np.array(gripper_pos))
 
             #only interested in the items closed to gripper tip
@@ -690,10 +694,16 @@ class Env():
                 else:
                     push_non_clustered_item = True
 
-        if push_clustered_item:
-            reward += 1.
-        elif push_non_clustered_item:
-            reward += 0.1
+        if is_pushed:
+            if push_clustered_item:
+                #reward for pushing clustered items
+                reward += 1.0
+            elif push_non_clustered_item:
+                #give a very small reward for pushing non-clustered items
+                reward += 0.1
+            else:
+                #CHANGE [NOTE 11/11/2024]: penalise ineffective pushing
+                reward +=-1.0
         
         print(f"[PUSH REWARD] R: {reward}")
 
@@ -775,7 +785,7 @@ class Env():
             print(f"IS_OUT_OF_SIGHT")
             self.is_within_sight = False
 
-    def reward(self, action_type, gripper_tip_pos, gripper_tip_ori):
+    def reward(self, action_type, gripper_tip_pos, gripper_tip_ori, is_grasped, is_pushed):
 
         #compute how close between gripper tip and the nearest item
         is_success_grasp = False
@@ -786,9 +796,9 @@ class Env():
 
         #compute reward
         if action_type == constants.GRASP:
-            reward, is_success_grasp = self.grasp_reward()
+            reward, is_success_grasp = self.grasp_reward(is_grasped)
         elif action_type == constants.PUSH:
-            reward, is_success_push  = self.push_reward(gripper_tip_pos)
+            reward, is_success_push  = self.push_reward(gripper_tip_pos, is_pushed)
 
         #check if the action is executable
         self.check_is_action_executable(gripper_tip_pos, gripper_tip_ori, UR5_cur_goal_pos)
@@ -800,7 +810,7 @@ class Env():
         self.check_is_out_of_workingspace(gripper_tip_pos)
 
         if self.is_out_of_working_space or self.is_collision_to_ground or self.gripper_cannot_operate or not self.can_execute_action:
-            reward -= 0.5
+            reward = -1.0
 
         print(f"[OVERALL REWARD] {reward}")
 
@@ -865,18 +875,18 @@ class Env():
                 target = self.gripper_joint_close
             self.open_close_gripper(is_open_gripper, target)
 
-
         self.move(delta_pos = delta_pos, delta_ori = delta_ori)
 
         #get gripper_tip_pos        
         gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
 
-        is_push = False
+        #decide if execute grasping or pushing action
+        is_pushed = False; is_grasped = False
         if action_type ==constants.GRASP:
-            #TODO [NOTE ON 15/09/2024]: change it to tunable parameters later if workable
             if gripper_tip_pos[2] <= constants.GRASP_HEIGHT: 
                 target = self.gripper_joint_close
                 is_open_gripper = False
+                is_grasped = True
             else:
                 target = self.gripper_joint_open
                 is_open_gripper = True
@@ -902,7 +912,7 @@ class Env():
                               0.]
                 
                 self.move(delta_pos = delta_push, delta_ori = [0., 0., 0.])
-                is_push = True
+                is_pushed = True
 
         #get gripper_tip_pos        
         gripper_tip_pos, gripper_tip_ori = self.get_obj_pose(self.gripper_tip_handle, self.sim.handle_world)
@@ -911,7 +921,7 @@ class Env():
         next_depth_img, next_gripper_state, next_yaw_state = self.get_raw_data(action_type)
 
         #compute reward
-        reward, is_success_grasp, is_success_push = self.reward(action_type, gripper_tip_pos, gripper_tip_ori)
+        reward, is_success_grasp, is_success_push = self.reward(action_type, gripper_tip_pos, gripper_tip_ori, is_grasped, is_pushed)
 
         #update item poses
         self.item_data_dict['c_pose'] = self.update_item_pose()
@@ -926,6 +936,8 @@ class Env():
                                                                        face_centers_items)
             self.item_data_dict['min_d'][i] = min_distance
 
+        #TODO [NOTE 11/11/2024] cannot execute the action even if the output is normal, not sure why
+        #current solution: reset the reward to ensure it does not affect the overall learning
         is_sim_abnormal = False
         if not self.can_execute_action and gripper_tip_pos[2] >= 0.1:
             reward = 0.
@@ -934,7 +946,7 @@ class Env():
             print(f"[GRIPPER TIP HEIGHT] {gripper_tip_pos[2]}")
             is_sim_abnormal = True
 
-        return reward, is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal
+        return reward, is_success_grasp, is_grasped, is_pushed, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal
     
     def return_home(self, is_env_reset, action_type = None):
 

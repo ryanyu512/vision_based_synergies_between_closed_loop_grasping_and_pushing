@@ -18,7 +18,7 @@ import constants
 from env import Env
 from buffer import BufferReplay
 from buffer_hld import BufferReplay_HLD
-from network import Actor, Critic, HDL_Net
+from network import Actor, Critic, HDL_Net, QNet
 
 #DL related
 import torch
@@ -85,27 +85,12 @@ class Agent():
         self.hld_net_target = HDL_Net(name = "hld_net_target", N_input_channels = 1, lr = lr)
         self.hld_mode = constants.HLD_MODE
 
+        #[RESEARCH 1.0]
         #initialise grasp actor
         self.grasp_actor = Actor(name = "grasp_actor", 
                                    max_action = constants.MAX_ACTION,
                                    N_input_channels = 2, 
                                    lr = lr) #depth image + yaw state
-        #initialise grasp critic network 1
-        self.grasp_critic1 = Critic(name = "grasp_critic1", 
-                                    N_input_channels = 6, 
-                                    lr = lr) #depth image + yaw state + dx + dy + dz + dyaw
-        #initialise grasp ciritc network 2
-        self.grasp_critic2 = Critic(name = "grasp_critic2", 
-                                    N_input_channels = 6, 
-                                    lr = lr) #depth image + yaw state + dx + dy + dz + dyaw
-        #initialise grasp critic network target 1
-        self.grasp_critic1_target = Critic(name = "grasp_critic1_target", 
-                                           N_input_channels = 6, 
-                                           lr = lr) #depth image + yaw state + dx + dy + dz + dyaw
-        #initialise grasp critic network target 2
-        self.grasp_critic2_target = Critic(name = "grasp_critic2_target", 
-                                           N_input_channels = 6, 
-                                           lr = lr) #depth image + yaw state + dx + dy + dz + dyaw
 
         #initialise grasp actor
         self.push_actor  = Actor(name = "push_actor", 
@@ -113,25 +98,14 @@ class Agent():
                                   N_input_channels = 2, #depth image + yaw angle
                                   action_type="push", 
                                   lr = lr)  
-        #initialise grasp critic network 1
-        self.push_critic1 = Critic(name = "push_critic1", 
-                                   N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
-        #initialise grasp ciritc network 2
-        self.push_critic2 = Critic(name = "push_critic2", 
-                                   N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
-        #initialise grasp critic network target 1
-        self.push_critic1_target = Critic(name = "push_critic1_target", 
-                                          N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
-        #initialise grasp critic network target 2
-        self.push_critic2_target = Critic(name = "push_critic2_target", 
-                                          N_input_channels = 6, lr = lr) #depth image + yaw angle + dx + dy + dz + dyaw 
+
+        #[RESEARCH 2.0]
+        #initialise grasp Q network
+        self.grasp_Q = QNet(name = "grasp_QNet")
+        self.push_Q = QNet(name = "push_QNet")
 
         #soft update to make critic target align with critic
         self.soft_update(critic = self.hld_net, target_critic = self.hld_net_target)
-        self.soft_update(critic = self.grasp_critic1, target_critic = self.grasp_critic1_target)
-        self.soft_update(critic = self.grasp_critic2, target_critic = self.grasp_critic2_target)
-        self.soft_update(critic = self.push_critic1, target_critic = self.push_critic1_target)
-        self.soft_update(critic = self.push_critic2, target_critic = self.push_critic2_target)
         print("[SUCCESS] initialise networks")
 
         #initialise batch size
@@ -236,8 +210,6 @@ class Agent():
 
     def preprocess_state(self, depth_img, gripper_state, yaw_ang, is_grasp = True):
         
-        #TODO [FINISH 29 AUG 2024]: yaw angle and gripper should not turn into image size in this stage
-
         #copy image
         in_depth_img = copy.copy(depth_img)
 
@@ -572,10 +544,10 @@ class Agent():
 
         return action_demo, normalised_action_demo
 
-    def is_action_done(self, step_low_level, N_step_low_level, is_push):
+    def is_action_done(self, step_low_level, N_step_low_level, is_pushed):
         if (step_low_level == N_step_low_level - 1 or self.is_success_grasp or self.env.is_out_of_working_space or 
             not self.env.can_execute_action or self.env.is_collision_to_ground or self.env.gripper_cannot_operate or 
-            is_push):
+            is_pushed):
             return True
         else:
             return False   
@@ -669,11 +641,13 @@ class Agent():
         return is_expert, N_step_low_level
 
     def compute_priority(self, current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, action_est, action_target):
-        next_q   = torch.min(next_q1, next_q2)  
-        target_q = reward + (1 - action_done) * self.gamma * next_q
-        critic1_loss = nn.MSELoss()(current_q1, target_q)
-        critic2_loss = nn.MSELoss()(current_q2, target_q)
-        critic_loss  = (critic1_loss + critic2_loss)/2.
+
+        if current_q1 is not None:
+            next_q   = torch.min(next_q1, next_q2)  
+            target_q = reward + (1 - action_done) * self.gamma * next_q
+            critic1_loss = nn.MSELoss()(current_q1, target_q)
+            critic2_loss = nn.MSELoss()(current_q2, target_q)
+            critic_loss  = (critic1_loss + critic2_loss)/2.
 
         #compute bc loss
         if is_expert:
@@ -685,8 +659,11 @@ class Agent():
             actor_loss = None
             priority = critic_loss
             
-        print(f"[LOSS] actor_loss: {actor_loss}, critic_loss: {critic_loss}")
-        print(f"[Q value] q1: {(target_q - current_q1)[0].item()}, q2: {(target_q - current_q2)[0].item()}, r: {reward}")
+        print(f"[LOSS] actor_loss: {actor_loss}")
+
+        if current_q1 is not None:
+            print(f"[LOSS] critic_loss: {critic_loss}")
+            print(f"[Q value] q1: {(target_q - current_q1)[0].item()}, q2: {(target_q - current_q2)[0].item()}, r: {reward}")
 
         return priority
 
@@ -867,6 +844,151 @@ class Agent():
         if self.is_debug:
             print('[SUCCESS] online update')
 
+    def online_update_lla_Q(self):
+
+        if (self.enable_rl_actor or self.enable_rl_actor) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
+            return 
+        
+        if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
+            return
+
+        if not self.enable_rl_critic and not self.enable_rl_actor and not self.enable_bc:
+            return
+
+        # self.hld_net.train()
+        # self.hld_net_target.eval()
+
+        # # batch, batch_depth_states, batch_action_types, batch_rewards, batch_next_depth_states, batch_dones
+        # exp = self.buffer_replay_hld.sample_buffer(self.N_batch_hld)
+
+        # N_exp = len(exp[0])
+        # print(f"N_hld_exp: {N_exp}")
+
+        # action_batch = torch.FloatTensor(exp[2]).long().unsqueeze(0).to(self.device)
+        # reward_batch = torch.FloatTensor(exp[3]).unsqueeze(0).to(self.device)
+        # done_batch   = torch.FloatTensor(exp[5]).unsqueeze(0).to(self.device)
+
+        # state_batch      = torch.zeros(exp[1].shape[0], 1, 128, 128).to(self.device)
+        # next_state_batch = torch.zeros(exp[4].shape[0], 1, 128, 128).to(self.device)
+
+        # for i in range(len(exp[1])):
+        #     #preprocess states
+        #     depth_state, _, _ = self.preprocess_state(depth_img     = exp[1][i],
+        #                                               gripper_state = None,
+        #                                               yaw_ang       = None)
+            
+        #     state_batch[i] = torch.FloatTensor(depth_state).unsqueeze(0)
+
+        #     #preprocess states
+        #     next_depth_state, _, _ = self.preprocess_state(depth_img     = exp[4][i],
+        #                                                    gripper_state = None,
+        #                                                    yaw_ang       = None)
+            
+        #     next_state_batch[i] = torch.FloatTensor(next_depth_state).unsqueeze(0)
+
+        # q_values = self.hld_net(state_batch)[torch.arange(N_exp), action_batch]
+
+        # with torch.no_grad():
+        #     next_actions = self.hld_net(next_state_batch).argmax(dim=1).unsqueeze(0).long()
+            
+        #     next_q_values = self.hld_net_target(next_state_batch)[torch.arange(N_exp), next_actions]
+        #     target_q_values = reward_batch + (1 - done_batch)*(self.gamma * next_q_values)
+
+        # # Compute the loss (Mean Squared Error between the target and the predicted Q-values)
+        # loss = nn.MSELoss()(q_values, target_q_values)
+
+        # # Perform gradient descent to minimize the loss
+        # self.hld_net.optimiser.zero_grad()
+        # loss.backward()
+        # self.hld_net.optimiser.step()
+
+        # self.soft_update(self.hld_net, self.hld_net_target, self.tau_hld)
+
+        # self.buffer_replay_hld.update_buffer(exp[0], 
+        #                                      nn.MSELoss(reduction = 'none')(q_values, target_q_values).to(torch.device('cpu')).detach().numpy()[0])
+
+        # if self.is_debug:
+        #     print('[SUCCESS] online update')
+
+    def online_update_lla(self, action_type):
+        
+        #     0,                  1,                    2,                3,
+        # batch, batch_depth_states, batch_gripper_states, batch_yaw_states, \
+        #             4,                     5,                  6,                          7,
+        # batch_actions, batch_gripper_actions, batch_next_actions, batch_next_gripper_actions, \
+        #             8,                       9,                        10,                    11,
+        # batch_rewards, batch_next_depth_states, batch_next_gripper_states, batch_next_yaw_states, \
+        #          12,                 13
+        # batch_dones, batch_success_mask
+
+        if (self.enable_rl_actor or self.enable_rl_actor) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
+            return 
+        
+        if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
+            return
+
+        if not self.enable_rl_critic and not self.enable_rl_actor and not self.enable_bc:
+            return
+
+        self.grasp_actor.train()
+        self.push_actor.train()
+
+        if self.enable_bc:
+            exp_expert = self.buffer_replay_expert.sample_buffer(batch_size = self.N_batch, action_type = action_type)
+            expert_batch_index = exp_expert[0]
+
+            expert_action_batch         = torch.FloatTensor(exp_expert[4]).float().to(self.device)
+            expert_gripper_action_batch = torch.FloatTensor(exp_expert[5]).long().to(self.device)
+
+            expert_rewards = torch.FloatTensor(exp_expert[8]).unsqueeze(1).to(self.device) 
+            expert_dones   = torch.FloatTensor(exp_expert[12]).unsqueeze(1).to(self.device)
+
+            print(f"[ONLINE UPDATE] N_expert_exp: {len(expert_batch_index)}")
+        
+            #compute bc - state and action state
+            expert_state_batch, expert_action_state_batch = self.compute_state_batch_and_state_action_batch(action_type,  
+                                                                                                            depth_states    = exp_expert[1],  
+                                                                                                            gripper_states  = exp_expert[2],  
+                                                                                                            yaw_states      = exp_expert[3], 
+                                                                                                            actions         = exp_expert[4], 
+                                                                                                            gripper_actions = exp_expert[5])
+
+            #compute bc - next state and action state
+            _, next_expert_action_state_batch = self.compute_state_batch_and_state_action_batch(action_type,  
+                                                                                                depth_states    = exp_expert[9],  
+                                                                                                gripper_states  = exp_expert[10],  
+                                                                                                yaw_states      = exp_expert[11], 
+                                                                                                actions         = exp_expert[6], 
+                                                                                                gripper_actions = exp_expert[7])
+                
+        if self.enable_bc:
+            #compute actor loss bc
+            actor_loss_bc, actor_loss_bc_no_reduce = self.compute_actor_loss_bc(action_type, expert_state_batch, expert_action_batch, expert_gripper_action_batch)
+            actor_loss = actor_loss_bc
+
+        if self.enable_bc or self.enable_rl_actor:
+            if action_type == constants.GRASP:
+                self.grasp_actor.optimiser.zero_grad()
+                actor_loss.backward()
+                self.grasp_actor.optimiser.step()
+            else:
+                self.push_actor.optimiser.zero_grad()
+                actor_loss.backward()
+                self.push_actor.optimiser.step()        
+
+            print(f"[ACTOR UPDATE] bc_lambda: {self.bc_lambda}")
+            print(f"[ACTOR UPDATE] actor_loss: {actor_loss.item()}")
+            if self.enable_bc:
+                print(f"[ACTOR UPDATE] actor_loss_bc: {actor_loss_bc.item()}")
+
+        if self.enable_bc:
+            self.buffer_replay_expert.update_buffer(expert_batch_index, 
+                                                    actor_loss_bc_no_reduce.to(torch.device('cpu')).detach().numpy(),
+                                                    None)
+            
+        if self.is_debug:
+            print('[SUCCESS] online update')
+
     def update_low_level_network(self, is_expert, is_sim_abnormal):
         
         #choose buffer replay
@@ -895,10 +1017,10 @@ class Agent():
 
         #update networks
         print("[UPDATE] GRASP NETWORK")
-        self.online_update(action_type = constants.GRASP)
+        self.online_update_lla(action_type = constants.GRASP)
 
         print("[UPDATE] PUSH NETWORK")
-        self.online_update(action_type = constants.PUSH)
+        self.online_update_lla(action_type = constants.PUSH)
         
         #save low-level network model
         self.save_models(self.action_type, self.episode_done, is_expert)
@@ -933,246 +1055,6 @@ class Agent():
             
             #update hld-net
             self.online_update_hld()
-
-    def online_update(self, action_type):
-        
-        #     0,                  1,                    2,                3,
-        # batch, batch_depth_states, batch_gripper_states, batch_yaw_states, \
-        #             4,                     5,                  6,                          7,
-        # batch_actions, batch_gripper_actions, batch_next_actions, batch_next_gripper_actions, \
-        #             8,                       9,                        10,                    11,
-        # batch_rewards, batch_next_depth_states, batch_next_gripper_states, batch_next_yaw_states, \
-        #          12,                 13
-        # batch_dones, batch_success_mask
-
-        if (self.enable_rl_actor or self.enable_rl_actor) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
-            return 
-        
-        if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
-            return
-
-        if not self.enable_rl_critic and not self.enable_rl_actor and not self.enable_bc:
-            return
-
-        self.grasp_actor.train()
-        self.grasp_critic1.train()
-        self.grasp_critic2.train()
-        self.grasp_critic1_target.eval()
-        self.grasp_critic2_target.eval()
-
-        self.push_actor.train()
-        self.push_critic1.train()
-        self.push_critic2.train()
-        self.push_critic1_target.eval()
-        self.push_critic2_target.eval()
-
-        #sampling experience 
-        if self.enable_rl_critic:
-            exp_rl      = self.buffer_replay.sample_buffer(batch_size = self.N_batch, action_type = action_type)
-            batch_index = exp_rl[0]
-            rewards     = torch.FloatTensor(exp_rl[8]).unsqueeze(1).to(self.device)
-            dones       = torch.FloatTensor(exp_rl[12]).unsqueeze(1).to(self.device)
-
-            print(f"[ONLINE UPDATE] N_rl_exp: {len(batch_index)}")
-
-            #compute rl - state and action state
-            state_batch, action_state_batch = self.compute_state_batch_and_state_action_batch(action_type,  
-                                                                                              depth_states    = exp_rl[1],  
-                                                                                              gripper_states  = exp_rl[2],  
-                                                                                              yaw_states      = exp_rl[3], 
-                                                                                              actions         = exp_rl[4], 
-                                                                                              gripper_actions = exp_rl[5])
-
-            #compute rl - next state        
-            next_state_batch, _ = self.compute_state_batch_and_state_action_batch(action_type, 
-                                                                                  depth_states    = exp_rl[9], 
-                                                                                  gripper_states  = exp_rl[10], 
-                                                                                  yaw_states      = exp_rl[11],      
-                                                                                  actions         = None,      
-                                                                                  gripper_actions = None)
-            
-            #compute rl - next action state
-            with torch.no_grad():
-                if action_type == constants.GRASP:
-                    next_action_state_batch        = torch.zeros(next_state_batch.shape[0], 6, 128, 128).to(self.device) 
-                    # next_action_batch, next_normalised_action_batch, next_gripper_action_batch, _, _, _ = self.grasp_actor.get_actions(next_state_batch)
-
-                    # action, normalised_action, z, normal
-                    next_action_batch, next_normalised_action_batch, _, _ = self.grasp_actor.get_actions(next_state_batch)
-                    
-                else:
-                    next_action_state_batch        = torch.zeros(next_state_batch.shape[0], 6, 128, 128).to(self.device)
-
-
-                    # next_action_batch, next_normalised_action_batch, next_gripper_action_batch, _, _, _ = self.push_actor.get_actions(next_state_batch)
-
-                    # action, normalised_action, z, normal
-                    next_action_batch, next_normalised_action_batch, _, _ = self.push_actor.get_actions(next_state_batch)
-
-
-                for i in range(next_state_batch.shape[0]):
-                    
-                    #compute state and state action
-                    if action_type == constants.GRASP:             
-                        
-                        # next_action_state = torch.concatenate([next_state_batch[i], 
-                        #                                       (next_normalised_action_batch[i][0]).expand(128, 128).unsqueeze(0),
-                        #                                       (next_normalised_action_batch[i][1]).expand(128, 128).unsqueeze(0),
-                        #                                       (next_normalised_action_batch[i][2]).expand(128, 128).unsqueeze(0),
-                        #                                       (next_normalised_action_batch[i][3]).expand(128, 128).unsqueeze(0),
-                        #                                       (next_gripper_action_batch[i]).expand(128, 128).unsqueeze(0)],
-                        #                                        dim = 0)
-                        
-                        next_action_state = torch.concatenate([next_state_batch[i], 
-                                                              (next_normalised_action_batch[i][0]).expand(128, 128).unsqueeze(0),
-                                                              (next_normalised_action_batch[i][1]).expand(128, 128).unsqueeze(0),
-                                                              (next_normalised_action_batch[i][2]).expand(128, 128).unsqueeze(0),
-                                                              (next_normalised_action_batch[i][3]).expand(128, 128).unsqueeze(0)],
-                                                               dim = 0)
-
-                    else:
-                        
-                        next_action_state = torch.concatenate([next_state_batch[i], 
-                                                              (next_normalised_action_batch[i][0]).expand(128, 128).unsqueeze(0),
-                                                              (next_normalised_action_batch[i][1]).expand(128, 128).unsqueeze(0),
-                                                              (next_normalised_action_batch[i][2]).expand(128, 128).unsqueeze(0),
-                                                              (next_normalised_action_batch[i][3]).expand(128, 128).unsqueeze(0)],
-                                                               dim = 0)
-            
-                    next_action_state_batch[i] = next_action_state
-
-        if self.enable_bc:
-            exp_expert = self.buffer_replay_expert.sample_buffer(batch_size = self.N_batch, action_type = action_type)
-            expert_batch_index = exp_expert[0]
-
-            expert_action_batch         = torch.FloatTensor(exp_expert[4]).float().to(self.device)
-            expert_gripper_action_batch = torch.FloatTensor(exp_expert[5]).long().to(self.device)
-
-            expert_rewards = torch.FloatTensor(exp_expert[8]).unsqueeze(1).to(self.device) 
-            expert_dones   = torch.FloatTensor(exp_expert[12]).unsqueeze(1).to(self.device)
-
-            print(f"[ONLINE UPDATE] N_expert_exp: {len(expert_batch_index)}")
-        
-            #compute bc - state and action state
-            expert_state_batch, expert_action_state_batch = self.compute_state_batch_and_state_action_batch(action_type,  
-                                                                                                            depth_states    = exp_expert[1],  
-                                                                                                            gripper_states  = exp_expert[2],  
-                                                                                                            yaw_states      = exp_expert[3], 
-                                                                                                            actions         = exp_expert[4], 
-                                                                                                            gripper_actions = exp_expert[5])
-
-            #compute bc - next state and action state
-            _, next_expert_action_state_batch = self.compute_state_batch_and_state_action_batch(action_type,  
-                                                                                                depth_states    = exp_expert[9],  
-                                                                                                gripper_states  = exp_expert[10],  
-                                                                                                yaw_states      = exp_expert[11], 
-                                                                                                actions         = exp_expert[6], 
-                                                                                                gripper_actions = exp_expert[7])
-        
-        if self.enable_rl_critic:
-            #compute critic loss rl
-            critic1_loss_rl, critic2_loss_rl, \
-            critic1_loss_rl_no_reduce, critic2_loss_rl_no_reduce = self.compute_critic_loss(action_type, 
-                                                                                            action_state_batch, 
-                                                                                            next_action_state_batch,
-                                                                                            rewards,
-                                                                                            dones)
-            
-        if self.enable_bc:
-            #compute critic loss bc
-            critic1_loss_bc, critic2_loss_bc, \
-            critic1_loss_bc_no_reduce, critic2_loss_bc_no_reduce = self.compute_critic_loss(action_type, 
-                                                                                            expert_action_state_batch, 
-                                                                                            next_expert_action_state_batch,
-                                                                                            expert_rewards,
-                                                                                            expert_dones)
-            
-        if self.enable_rl_critic and self.enable_bc:
-            critic1_loss = critic1_loss_rl + critic1_loss_bc
-            critic2_loss = critic2_loss_rl + critic2_loss_bc
-        elif self.enable_bc:
-            critic1_loss = critic1_loss_bc
-            critic2_loss = critic2_loss_bc
-        elif self.enable_rl_critic:
-            critic1_loss = critic1_loss_rl 
-            critic2_loss = critic2_loss_rl
-
-        if action_type == constants.GRASP:
-            self.grasp_critic1.optimiser.zero_grad()
-            critic1_loss.backward()
-            self.grasp_critic1.optimiser.step()
-        
-            self.grasp_critic2.optimiser.zero_grad()
-            critic2_loss.backward()
-            self.grasp_critic2.optimiser.step()
-
-            self.soft_update(self.grasp_critic1, self.grasp_critic1_target, tau = self.tau)
-            self.soft_update(self.grasp_critic2, self.grasp_critic2_target, tau = self.tau)
-        else:
-            self.push_critic1.optimiser.zero_grad()
-            critic1_loss.backward()
-            self.push_critic1.optimiser.step()
-        
-            self.push_critic2.optimiser.zero_grad()
-            critic2_loss.backward()
-            self.push_critic2.optimiser.step()
-
-            self.soft_update(self.push_critic1, self.push_critic1_target, tau = self.tau)
-            self.soft_update(self.push_critic2, self.push_critic2_target, tau = self.tau)
-
-        print(f"[CRITIC UPDATE] critic1_loss: {critic1_loss.item()}, critic2_loss: {critic2_loss.item()}")
-
-        #actor update
-        if self.enable_rl_actor:
-            #compute actor loss rl
-            actor_loss_rl = self.compute_actor_loss_rl(action_type, state_batch)
-        
-        if self.enable_bc:
-            #compute actor loss bc
-            actor_loss_bc, actor_loss_bc_no_reduce = self.compute_actor_loss_bc(action_type, expert_state_batch, expert_action_batch, expert_gripper_action_batch)
-
-        if self.enable_rl_actor and self.enable_bc:
-            actor_loss = (self.rl_lambda*actor_loss_rl + self.bc_lambda*actor_loss_bc)
-            self.bc_lambda = np.max([self.min_bc_lambda, self.bc_lambda*self.bc_lambda_decay])
-            self.rl_lambda = np.min([self.max_rl_lambda, self.rl_lambda*self.rl_lambda_upscale])
-        elif self.enable_bc:
-            actor_loss = actor_loss_bc
-        elif self.enable_rl_actor:
-            actor_loss = actor_loss_rl
-
-        if self.enable_bc or self.enable_rl_actor:
-            if action_type == constants.GRASP:
-                self.grasp_actor.optimiser.zero_grad()
-                actor_loss.backward()
-                self.grasp_actor.optimiser.step()
-            else:
-                self.push_actor.optimiser.zero_grad()
-                actor_loss.backward()
-                self.push_actor.optimiser.step()        
-
-            print(f"[ACTOR UPDATE] rl_lambda: {self.rl_lambda}")
-            print(f"[ACTOR UPDATE] bc_lambda: {self.bc_lambda}")
-            print(f"[ACTOR UPDATE] actor_loss: {actor_loss.item()}")
-            if self.enable_rl_actor:
-                print(f"[ACTOR UPDATE] actor_loss_rl: {actor_loss_rl.item()}")
-            if self.enable_bc:
-                print(f"[ACTOR UPDATE] actor_loss_bc: {actor_loss_bc.item()}")
-
-        #update priority
-        if self.enable_rl_critic:
-            critic_loss_rl_no_reduce = (critic1_loss_rl_no_reduce + critic2_loss_rl_no_reduce)/2.
-            self.buffer_replay.update_buffer(batch_index, 
-                                             None,
-                                             critic_loss_rl_no_reduce.to(torch.device('cpu')).detach().numpy())
-
-        if self.enable_bc:
-            critic_loss_bc_no_reduce = (critic1_loss_bc_no_reduce + critic2_loss_bc_no_reduce)/2.
-            self.buffer_replay_expert.update_buffer(expert_batch_index, 
-                                                    actor_loss_bc_no_reduce.to(torch.device('cpu')).detach().numpy(),
-                                                    critic_loss_bc_no_reduce.to(torch.device('cpu')).detach().numpy())
-
-        if self.is_debug:
-            print('[SUCCESS] online update')
 
     def compute_critic_loss(self, 
                             action_type, 
@@ -1375,10 +1257,6 @@ class Agent():
             if not is_expert and self.best_grasp_success_rate < grasp_success_rate:
                 self.best_grasp_success_rate = grasp_success_rate
                 self.grasp_actor.save_checkpoint(True)
-                self.grasp_critic1.save_checkpoint(True)
-                self.grasp_critic2.save_checkpoint(True)
-                self.grasp_critic1_target.save_checkpoint(True)
-                self.grasp_critic2_target.save_checkpoint(True)
                 print("[SUCCESS] save best grasp models")
         elif action_type == constants.PUSH:
             #save push network
@@ -1387,25 +1265,13 @@ class Agent():
             if not is_expert and self.best_push_success_rate < push_success_rate:
                 self.best_push_success_rate = push_success_rate
                 self.push_actor.save_checkpoint(True)
-                self.push_critic1.save_checkpoint(True)
-                self.push_critic2.save_checkpoint(True)
-                self.push_critic1_target.save_checkpoint(True)
-                self.push_critic2_target.save_checkpoint(True)
                 print("[SUCCESS] save best push models")
 
         if episode_done or save_name is not None:
             self.grasp_actor.save_checkpoint(name=save_name)
-            self.grasp_critic1.save_checkpoint(name=save_name)
-            self.grasp_critic2.save_checkpoint(name=save_name)
-            self.grasp_critic1_target.save_checkpoint(name=save_name)
-            self.grasp_critic2_target.save_checkpoint(name=save_name)
             print("[SUCCESS] save grasp models check point")
 
             self.push_actor.save_checkpoint(name=save_name)
-            self.push_critic1.save_checkpoint(name=save_name)
-            self.push_critic2.save_checkpoint(name=save_name)
-            self.push_critic1_target.save_checkpoint(name=save_name)
-            self.push_critic2_target.save_checkpoint(name=save_name)
             print("[SUCCESS] save push models check point")
         
     def load_models(self):
@@ -1429,17 +1295,9 @@ class Agent():
         try:
             if not self.is_eval:
                 self.grasp_actor.load_checkpoint()
-                self.grasp_critic1.load_checkpoint()
-                self.grasp_critic2.load_checkpoint()
-                self.grasp_critic1_target.load_checkpoint()
-                self.grasp_critic2_target.load_checkpoint()
                 print("[LOAD MODEL] load grasp check point")
             else:
                 self.grasp_actor.load_checkpoint(True)
-                self.grasp_critic1.load_checkpoint(True)
-                self.grasp_critic2.load_checkpoint(True)
-                self.grasp_critic1_target.load_checkpoint(True)
-                self.grasp_critic2_target.load_checkpoint(True)
                 print("[LOAD MODEL] load grasp best model")
 
             print("[SUCCESS] load grasp model")
@@ -1450,17 +1308,9 @@ class Agent():
         try:
             if not self.is_eval:
                 self.push_actor.load_checkpoint()
-                self.push_critic1.load_checkpoint()
-                self.push_critic2.load_checkpoint()
-                self.push_critic1_target.load_checkpoint()
-                self.push_critic2_target.load_checkpoint()
                 print("[LOAD MODEL] load push check point")
             else:
                 self.push_actor.load_checkpoint(True)
-                self.push_critic1.load_checkpoint(True)
-                self.push_critic2.load_checkpoint(True)
-                self.push_critic1_target.load_checkpoint(True)
-                self.push_critic2_target.load_checkpoint(True)
                 print("[LOAD MODEL] load push best model")
 
             print("[SUCCESS] load push model")
@@ -1635,15 +1485,12 @@ class Agent():
                         action, normalised_action = self.get_action_from_demo(move)
                     else:
                         action, normalised_action = action_est, normalised_action_est
-                    
-                    #compute current q value
-                    current_q1, current_q2 = self.get_q_value_from_critic(state[0], normalised_action[0], False)
-                    
+                                        
                     #interact with env
-                    reward, self.is_success_grasp, is_push, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal = self.env.step(self.action_type, 
-                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
-                                                                                                                                              action.to(torch.device('cpu')).detach().numpy()[0][3], 
-                                                                                                                                              None)
+                    reward, self.is_success_grasp, is_grasped, is_pushed, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal = self.env.step(self.action_type, 
+                                                                                                                                                  action.to(torch.device('cpu')).detach().numpy()[0][0:3], 
+                                                                                                                                                  action.to(torch.device('cpu')).detach().numpy()[0][3], 
+                                                                                                                                                  None)
 
                     #print actions
                     print(f"[ACTION TYPE]: {self.action_type}")  
@@ -1655,7 +1502,7 @@ class Agent():
                     self.episode_done = False if self.env.N_pickable_item > 0 else True
 
                     #check if action is done
-                    action_done = self.is_action_done(i, N_step_low_level, is_push)                    
+                    action_done = self.is_action_done(i, N_step_low_level, is_pushed)                    
 
                     #get next state 
                     next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
@@ -1676,11 +1523,8 @@ class Agent():
                     else:
                         next_action, next_normalised_action = next_action_est, next_normalised_action_est
                     
-                    #compute next q value
-                    next_q1, next_q2 = self.get_q_value_from_critic(next_state[0], next_normalised_action[0], True)
-
                     #compute priority for experience
-                    priority = self.compute_priority(current_q1, current_q2, next_q1, next_q2, reward, action_done, is_expert, normalised_action_est, normalised_action)
+                    priority = self.compute_priority(None, None, None, None, reward, action_done, is_expert, normalised_action_est, normalised_action)
 
                     # store experience during executing low-level action
                     self.append_lla_exp(depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
@@ -1693,10 +1537,12 @@ class Agent():
                         break 
                     elif action_done:
 
-                        if self.is_success_grasp or i == N_step_low_level - 1 or is_push:
+                        if self.is_success_grasp or i == N_step_low_level - 1 or is_pushed:
                             if self.is_success_grasp:
-                                print("[SUCCESS] grasp an item")
-                            elif is_push:
+                                print("[SUCCESS] grasp an item successfully")
+                            elif is_grasped:
+                                print("[SUCCESS] perform grasp action")
+                            elif is_pushed:
                                 print("[SUCCESS] perform push action")
                             else:
                                 print("[SUCCESS] finish an action")
