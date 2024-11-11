@@ -884,7 +884,7 @@ class Env():
             self.open_close_gripper(is_open_gripper, target)
         elif action_type == constants.PUSH:
 
-            if gripper_tip_pos[2] >= 0.1:
+            if gripper_tip_pos[2] >= constants.PUSH_CLOSE_GRIPPER_HEIGHT:
                 is_open_gripper = True
                 target = self.gripper_joint_open
             else:
@@ -1702,7 +1702,70 @@ class Env():
                         print("[ERROR] step_mag_ori_home2start[0] > constants.PUSH_MAX_ACTION[-1]")
 
                     print(f"[PUSH GUIDANCE] home2start- linear: {step_mag_lin_home2start[0]}, angular: {np.rad2deg(step_mag_ori_home2start[0])}")
+                
                 else:
-                    
+                    #compute N_step for 3D movement and orientation
+                    N_step_x = np.ceil(np.abs(push_home2start[0])/constants.PUSH_MAX_ACTION_Q[0])
+                    N_step_y = np.ceil(np.abs(push_home2start[1])/constants.PUSH_MAX_ACTION_Q[1])
+                    N_step_z = np.ceil(np.abs(push_home2start[2])/constants.PUSH_MAX_ACTION_Q[2])
+                    N_step_yaw = np.ceil(np.abs(delta_yaw)/constants.PUSH_MAX_ACTION_Q[3])
+
+                    N_step = np.max(np.array([N_step_x, N_step_y, N_step_z, N_step_yaw]))
+
+                    print(f"N_step_x: {N_step_x}, N_step_y: {N_step_y}, N_step_z: {N_step_z}, N_step_yaw: {N_step_yaw}, N_step: {N_step}")
+
+                    #compute which step should move
+                    x_index = np.linspace(0, int(N_step), int(N_step_x), endpoint = True, dtype = int)
+                    y_index = np.linspace(0, int(N_step), int(N_step_y), endpoint = True, dtype = int)
+                    z_index = np.linspace(0, int(N_step), int(N_step_z), endpoint = True, dtype = int)
+                    yaw_index = np.linspace(0, int(N_step), int(N_step_yaw), endpoint = True, dtype = int)
+
+                    #compute movement
+                    adj_index = [x_index, 
+                                 y_index, 
+                                 z_index, 
+                                 yaw_index]
+                    adj_count = [0]*4
+
+                    print(f"adj_index: {adj_index}")
+
+                    gripper_tip_pos_adjust = copy.copy(gripper_tip_pos)
+                    delta_4d = np.array([push_home2start[0], push_home2start[1], push_home2start[2], delta_yaw])
+                    for j in range(int(N_step)):
+
+                        movement = [0]*6; movement[-2] = 1
+
+                        for k in range(4):
+                            if adj_count[k] < len(adj_index[k]) and j == adj_index[k][adj_count[k]]:
+                                if delta_4d[k] > 0:
+                                    movement[k] = constants.PUSH_MAX_ACTION_Q[k]
+                                elif delta_4d[k] < 0:
+                                    movement[k] = -constants.PUSH_MAX_ACTION_Q[k]
+                                else:
+                                    movement[k] = 0.
+                                
+                                adj_count[k] += 1
+
+                            if k <= 2:
+                                gripper_tip_pos_adjust[k] += movement[k]
+
+                        delta_move_push.append(movement) #open gripper
+
+                    while True:
+
+                        movement = [0]*6
+                        movement[2] = -constants.PUSH_MAX_ACTION_Q[2]
+
+                        if gripper_tip_pos_adjust[2] > constants.PUSH_CLOSE_GRIPPER_HEIGHT:
+                            movement[-2] = 1
+                        else:
+                            movement[-1] = 1
+                        
+                        delta_move_push.append(movement)
+
+                        if gripper_tip_pos_adjust[2] <= constants.PUSH_HEIGHT:
+                            break
+                        gripper_tip_pos_adjust[2] += movement[2]
+
 
         return delta_move_grasp, delta_move_push, target_item_pos_grasp, target_item_pos_push
