@@ -848,7 +848,7 @@ class Agent():
 
     def online_update_lla_Q(self):
 
-        if (self.enable_rl_actor or self.enable_rl_actor) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
+        if (self.enable_rl_actor or self.enable_rl_critic) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
             return 
         
         if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
@@ -923,7 +923,7 @@ class Agent():
         #          12,                 13
         # batch_dones, batch_success_mask
 
-        if (self.enable_rl_actor or self.enable_rl_actor) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
+        if (self.enable_rl_actor or self.enable_rl_critic) and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
             return 
         
         if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
@@ -932,8 +932,10 @@ class Agent():
         if not self.enable_rl_critic and not self.enable_rl_actor and not self.enable_bc:
             return
 
-        self.grasp_actor.train()
-        self.push_actor.train()
+        if action_type == constants.GRASP:
+            self.grasp_actor.train()
+        elif action_type == constants.PUSH:
+            self.push_actor.train()
 
         if self.enable_bc:
             exp_expert = self.buffer_replay_expert.sample_buffer(batch_size = self.N_batch, action_type = action_type)

@@ -442,6 +442,7 @@ class QNet(nn.Module):
                  FCL_dims = [512, 256], #FLC network dimension
                  N_action = 3, #action dimension
                  lr = 1e-4, #learning rate
+                 epsilon = 0.1, #epsilon for action explorations
                  name = 'QNet', #define the network name
                  checkpt_dir = 'logs/models'): #define checkpoint directory
     
@@ -527,13 +528,15 @@ class QNet(nn.Module):
         self.name = name
         if not os.path.exists(self.checkpt_dir):
             os.makedirs(self.checkpt_dir)
-        self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_sac'))
+        self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_Q'))
 
         #initialise optimiser
         self.optimiser = optim.Adam(self.parameters(), lr = lr)
 
         #used for preventing 0 value
         self.sm_c = 1e-6                 
+
+        self.epsilon = epsilon
 
         self.to(self.device)
 
@@ -574,12 +577,29 @@ class QNet(nn.Module):
             print("[MAX OUTPUT]")
             print(f"[Q net] x: {x_ind}, y: {y_ind}, z: {z_ind}, yaw_ind: {yaw_ind}")
         else:
-            x_ind = random.randrange(self.N_output)
-            y_ind = random.randrange(self.N_output)
-            z_ind = random.randrange(self.N_output)
-            yaw_ind = random.randrange(self.N_output)
+            x_ind = random.randrange(self.N_action)
+            y_ind = random.randrange(self.N_action)
+            z_ind = random.randrange(self.N_action)
+            yaw_ind = random.randrange(self.N_action)
 
             print("[RANDOM OUTPUT]")
             print(f"[Q net] x: {x_ind}, y: {y_ind}, z: {z_ind}, yaw_ind: {yaw_ind}")
             
-        return Qx, Qy, Qz, Qyaw, x_ind, y_ind, z_ind
+        return Qx, Qy, Qz, Qyaw, x_ind, y_ind, z_ind, yaw_ind
+    
+    def save_checkpoint(self, is_best = False, name = None):
+        if is_best:
+            torch.save(self.state_dict(), self.checkpt_file)
+        elif not is_best and name is not None:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_' + name + '_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
+        else:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
+
+    def load_checkpoint(self, is_best = False):
+        if is_best:
+            self.load_state_dict(torch.load(self.checkpt_file))
+        else:
+            file = os.path.abspath(os.path.join(self.checkpt_dir, self.name + '_checkpt'))
+            self.load_state_dict(torch.load(file))

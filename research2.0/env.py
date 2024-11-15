@@ -1607,7 +1607,7 @@ class Env():
                                  yaw_index]
                     adj_count = [0]*4
 
-                    print(f"adj_index: {adj_index}")
+                    # print(f"adj_index: {adj_index}")
 
                     gripper_tip_pos_adjust = copy.copy(gripper_tip_pos)
                     delta_4d = np.array([delta_lin[0], delta_lin[1], delta_lin[2], delta_ori])
@@ -1739,7 +1739,7 @@ class Env():
                                  yaw_index]
                     adj_count = [0]*4
 
-                    print(f"adj_index: {adj_index}")
+                    # print(f"adj_index: {adj_index}")
 
                     gripper_tip_pos_adjust = copy.copy(gripper_tip_pos)
                     delta_4d = np.array([push_home2start[0], push_home2start[1], push_home2start[2], delta_yaw])
