@@ -602,7 +602,7 @@ class Agent():
 
     def is_expert_mode(self, episode, max_episode, demo_low_level_actions):
 
-        if not self.is_save_stage1 and episode > int(max_episode*0.1):
+        if not self.is_save_stage1 and episode > self.max_stage1_episode:
             self.save_models(None, False, False, 'stage1')
             self.is_save_stage1 = True
 

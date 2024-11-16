@@ -611,66 +611,38 @@ class Agent():
         elif self.lla_mode == constants.BC_RL:
             return Qx, Qy, Qz, Qyaw, x_ind, y_ind, z_ind, yaw_ind
         
-    def convert_action_index_to_action(self, action_index, action_type, is_xyz = True):
+    def convert_action_index_to_action(self, action_index, action_type, is_z = False, is_xyz = True):
 
         if is_xyz:
-            if action_index == 0:
-                if action_type == constants.GRASP:
-                    return -constants.GRASP_MAX_ACTION_Q[0] 
-                elif action_type == constants.PUSH:
-                    return -constants.PUSH_MAX_ACTION_Q[0]
-            elif action_index == 1:
-                return 0.
-            elif action_index == 2:
-                if action_type == constants.GRASP:
-                    return constants.GRASP_MAX_ACTION_Q[0]
-                elif action_type == constants.PUSH:
-                    return constants.PUSH_MAX_ACTION_Q[0]
+            if action_type == constants.GRASP:
+                if is_z:
+                    action = constants.GRASP_MAX_ACTION_Q[2]
+                else:
+                    action = constants.GRASP_MAX_ACTION_Q[0]
+            elif action_type == constants.PUSH:
+                if is_z:
+                    action = constants.PUSH_MAX_ACTION_Q[2]
+                else:
+                    action = constants.PUSH_MAX_ACTION_Q[0]
         else:
-            if action_index == 0:
-                if action_type == constants.GRASP:
-                    return -constants.GRASP_MAX_ACTION_Q[3] 
-                elif action_type == constants.PUSH:
-                    return -constants.PUSH_MAX_ACTION_Q[3]
-            elif action_index == 1:
-                return 0.
-            elif action_index == 2:
-                if action_type == constants.GRASP:
-                    return constants.GRASP_MAX_ACTION_Q[3] 
-                elif action_type == constants.PUSH:
-                    return constants.PUSH_MAX_ACTION_Q[3]
+            if action_type == constants.GRASP:
+                action = constants.GRASP_MAX_ACTION_Q[-1]
+            elif action_type == constants.PUSH:
+                action = constants.PUSH_MAX_ACTION_Q[-1]
+
+        if action_index == 0:
+            return -action
+        elif action_index == 1:
+            return 0.
+        elif action_index == 2:
+            return action
                 
     def convert_action_to_action_index(self, action, action_type, is_xyz = True):
-        if is_xyz:
-            if action_type == constants.GRASP:
-                if action == -constants.GRASP_MAX_ACTION_Q[0] or -constants.GRASP_MAX_ACTION_Q[2]:
-                    return 0
-                elif action == 0:
-                    return 1
-                elif action == constants.GRASP_MAX_ACTION_Q[0] or -constants.GRASP_MAX_ACTION_Q[2]:
-                    return 2
-            elif action_type == constants.PUSH:
-                if action == -constants.PUSH_MAX_ACTION_Q[0] or -constants.PUSH_MAX_ACTION_Q[2]:
-                    return 0
-                elif action == 0:
-                    return 1
-                elif action == constants.PUSH_MAX_ACTION_Q[0] or -constants.PUSH_MAX_ACTION_Q[2]:
-                    return 2
-        else:
-            if action_type == constants.GRASP:
-                if action == -constants.GRASP_MAX_ACTION_Q[-1]:
-                    return 0
-                elif action == 0:
-                    return 1
-                elif action == constants.GRASP_MAX_ACTION_Q[-1]:
-                    return 2
-            elif action_type == constants.PUSH:
-                if action == -constants.PUSH_MAX_ACTION_Q[-1]:
-                    return 0
-                elif action == 0:
-                    return 1
-                elif action == constants.PUSH_MAX_ACTION_Q[-1]:
-                    return 2
+
+        if action == 0:
+            return 1
+
+        return 0 if action < 0 else 2
 
     def get_action_from_network_Q(self, state):
 
@@ -759,7 +731,7 @@ class Agent():
 
     def is_expert_mode(self, episode, max_episode, demo_low_level_actions):
 
-        if not self.is_save_stage1 and episode > int(max_episode*0.1):
+        if not self.is_save_stage1 and episode > self.max_stage1_episode:
             self.save_models(None, False, False, 'stage1')
             self.is_save_stage1 = True
 
@@ -1832,10 +1804,10 @@ class Agent():
                             action = [action_x, action_y, action_z, action_yaw]  
                         else:
                             action = [action_x, action_y, action_z, action_yaw]
-                            action4d = [self.convert_action_index_to_action(action[0], self.action_type, True), 
-                                        self.convert_action_index_to_action(action[1], self.action_type, True),
-                                        self.convert_action_index_to_action(action[2], self.action_type, True),
-                                        self.convert_action_index_to_action(action[3], self.action_type, False)]
+                            action4d = [self.convert_action_index_to_action(action[0], self.action_type, is_z = False, is_xyz = True), 
+                                        self.convert_action_index_to_action(action[1], self.action_type, is_z = False, is_xyz = True),
+                                        self.convert_action_index_to_action(action[2], self.action_type, is_z = True, is_xyz = True),
+                                        self.convert_action_index_to_action(action[3], self.action_type, is_z = False, is_xyz = False)]
                             action4d = torch.FloatTensor(action4d).unsqueeze(0).to(self.device)
 
                         #interact with env
