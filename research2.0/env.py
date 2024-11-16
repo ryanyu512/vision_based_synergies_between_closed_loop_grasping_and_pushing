@@ -1628,8 +1628,9 @@ class Env():
 
                             if k <= 2:
                                 gripper_tip_pos_adjust[k] += movement[k]
-
-                        delta_move_grasp.append(movement) #open gripper
+                        
+                        if np.abs(np.array(movement)[0:4]).sum() > 0:
+                            delta_move_grasp.append(movement) #open gripper
 
                     while True:
 
@@ -1641,10 +1642,12 @@ class Env():
                         else:
                             movement[-1] = 1
                         
-                        delta_move_grasp.append(movement)
+                        if np.abs(np.array(movement)[0:4]).sum() > 0:
+                            delta_move_grasp.append(movement)
 
                         if movement[-1] == 1:
                             break
+                        
                         gripper_tip_pos_adjust[2] += movement[2]
 
             if not is_get_push_target and min_distance <= min_distance_threshold:
@@ -1761,7 +1764,8 @@ class Env():
                             if k <= 2:
                                 gripper_tip_pos_adjust[k] += movement[k]
 
-                        delta_move_push.append(movement) #open gripper
+                        if np.abs(np.array(movement)[0:4]).sum() > 0:
+                            delta_move_push.append(movement) #open gripper
 
                     while True:
 
@@ -1773,7 +1777,8 @@ class Env():
                         else:
                             movement[-1] = 1
                         
-                        delta_move_push.append(movement)
+                        if np.abs(np.array(movement)[0:4]).sum() > 0:
+                            delta_move_push.append(movement)
 
                         if gripper_tip_pos_adjust[2] <= constants.PUSH_HEIGHT:
                             break
