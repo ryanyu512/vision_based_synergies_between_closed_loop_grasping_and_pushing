@@ -522,7 +522,7 @@ class Agent():
         try:
             self.load_agent_data()
             self.is_transform_to_full_train()
-            if self.is_save_stage1 and not self.is_eval:
+            if self.episode >= self.max_stage1_episode and not self.is_eval:
                 self.enable_rl = True
             print("[SUCCESS] load agent data") 
         except:
@@ -731,8 +731,9 @@ class Agent():
 
     def is_expert_mode(self, episode, max_episode, demo_low_level_actions):
 
-        if not self.is_save_stage1 and episode > self.max_stage1_episode:
+        if not self.is_save_stage1 and episode >= self.max_stage1_episode:
             self.save_models(None, False, False, 'stage1')
+            self.enable_rl = True
             self.is_save_stage1 = True
 
         #decide if it should enter demo mode
@@ -799,24 +800,7 @@ class Agent():
         return priority
 
     def compute_priority_Q(self, next_state, rewards, dones, Qx, Qy, Qz, Qyaw, nQx, nQy, nQz, nQyaw):
-        # #for research 2.0
-        # with torch.no_grad():
-        #     if action_type == constants.GRASP:
-        #         self.grasp_Q.eval()
-        #         self.grasp_Q_target.eval()
-        #         _, _, _, _, next_action_x, next_action_y, next_action_z, next_action_yaw = self.grasp_Q.get_actions(next_state, take_max = True)
-        #         next_Qx, next_Qy, next_Qz, next_Qyaw = self.grasp_Q_target(next_state)
-        #     elif action_type == constants.PUSH:
-        #         self.push_Q.eval()
-        #         self.push_Q_target.eval()
-        #         _, _, _, _, next_action_x, next_action_y, next_action_z, next_action_yaw = self.push_Q.get_actions(next_state, take_max = True)
-        #         next_Qx, next_Qy, next_Qz, next_Qyaw = self.push_Q_target(next_state)
-
-        #     next_Qx = next_Qx[0][next_action_x] 
-        #     next_Qy = next_Qy[0][next_action_y] 
-        #     next_Qz = next_Qz[0][next_action_z] 
-        #     next_Qyaw = next_Qyaw[0][next_action_yaw] 
-
+        #for research 2.0
         target_Qx = rewards + (1 - dones)*nQx
         target_Qy = rewards + (1 - dones)*nQy
         target_Qz = rewards + (1 - dones)*nQz
@@ -826,6 +810,11 @@ class Agent():
                  nn.MSELoss()(Qy, target_Qy) + \
                  nn.MSELoss()(Qz, target_Qz) + \
                  nn.MSELoss()(Qyaw, target_Qyaw)
+        
+        print(f"target_Qx: {target_Qx} Qx: {Qx}")
+        print(f"target_Qy: {target_Qy} Qy: {Qy}")
+        print(f"target_Qz: {target_Qz} Qz: {Qz}")
+        print(f"target_Qyaw: {target_Qyaw} Qyaw: {Qyaw}")
         
         return q_loss
 
@@ -1010,12 +999,6 @@ class Agent():
     #for research 2.0
     def online_update_lla_Q(self, action_type):
 
-        if self.enable_rl and (not self.buffer_replay.have_grasp_data or not self.buffer_replay.have_push_data):
-            return 
-        
-        if self.enable_bc and (not self.buffer_replay_expert.have_grasp_data or not self.buffer_replay_expert.have_push_data):
-            return
-
         if not self.enable_rl and not self.enable_bc:
             return
 
@@ -1024,32 +1007,35 @@ class Agent():
         elif action_type == constants.PUSH:
             self.push_Q.train()
 
-        if self.enable_bc:
+        loss_bc = None
+        if self.enable_bc and (self.buffer_replay_expert.have_grasp_data and self.buffer_replay_expert.have_push_data):
             loss_bc = self.compute_lla_Q_loss(action_type, self.buffer_replay_expert, is_bc = True)
         
-        if self.enable_rl:
+        loss_rl = None
+        if self.enable_rl and (self.buffer_replay.have_grasp_data and self.buffer_replay.have_push_data):
             loss_rl = self.compute_lla_Q_loss(action_type, self.buffer_replay, is_bc = False)
         
-        if self.enable_bc and self.enable_rl:
+        loss = None
+        if self.enable_bc and self.enable_rl and loss_bc is not None and loss_rl is not None:
             loss = loss_bc + loss_rl
-        elif self.enable_rl:
+        elif self.enable_rl and loss_rl is not None:
             loss = loss_rl
-        elif self.enable_bc:
+        elif self.enable_bc and loss_bc is not None:
             loss = loss_bc
         
         if self.enable_bc:
             print(f"[Q LLA UPDATE] loss_bc: {loss_bc}")
         if self.enable_rl:
-            print(f"[Q LLA UPDATE] loss_bc: {loss_rl}")
+            print(f"[Q LLA UPDATE] loss_rl: {loss_rl}")
         print(f"[Q LLA UPDATE] loss: {loss}")
 
-        if action_type == constants.GRASP:
+        if loss is not None and action_type == constants.GRASP:
             self.grasp_Q.zero_grad()
             loss.backward()
             self.grasp_Q.optimiser.step()
 
             self.soft_update_Q(self.grasp_Q, self.grasp_Q_target, self.tau)
-        elif action_type == constants.PUSH:            
+        elif loss is not None and action_type == constants.PUSH:            
             self.push_Q.zero_grad()
             loss.backward()
             self.push_Q.optimiser.step()
