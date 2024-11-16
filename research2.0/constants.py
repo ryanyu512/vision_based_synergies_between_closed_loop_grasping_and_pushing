@@ -51,8 +51,8 @@ WORK_SPACE_DIM = [0.30, 0.25, 0.]
 MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(30.)]
 PUSH_MAX_ACTION = [0.07, 0.07, 0.07, np.deg2rad(45.)]
 
-GRASP_MAX_ACTION_Q = [0.01, 0.01, 0.01, np.deg2rad(5)]
-PUSH_MAX_ACTION_Q = [0.01, 0.01, 0.01, np.deg2rad(5)]
+GRASP_MAX_ACTION_Q = [0.015, 0.015, 0.02, np.deg2rad(7.5)]
+PUSH_MAX_ACTION_Q = [0.015, 0.015, 0.02, np.deg2rad(15)]
 
 #define push height
 PUSH_CLOSE_GRIPPER_HEIGHT = 0.10

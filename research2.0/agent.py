@@ -643,18 +643,18 @@ class Agent():
     def convert_action_to_action_index(self, action, action_type, is_xyz = True):
         if is_xyz:
             if action_type == constants.GRASP:
-                if action == -constants.GRASP_MAX_ACTION_Q[0]:
+                if action == -constants.GRASP_MAX_ACTION_Q[0] or -constants.GRASP_MAX_ACTION_Q[2]:
                     return 0
                 elif action == 0:
                     return 1
-                elif action == constants.GRASP_MAX_ACTION_Q[0]:
+                elif action == constants.GRASP_MAX_ACTION_Q[0] or -constants.GRASP_MAX_ACTION_Q[2]:
                     return 2
             elif action_type == constants.PUSH:
-                if action == -constants.PUSH_MAX_ACTION_Q[0]:
+                if action == -constants.PUSH_MAX_ACTION_Q[0] or -constants.PUSH_MAX_ACTION_Q[2]:
                     return 0
                 elif action == 0:
                     return 1
-                elif action == constants.PUSH_MAX_ACTION_Q[0]:
+                elif action == constants.PUSH_MAX_ACTION_Q[0] or -constants.PUSH_MAX_ACTION_Q[2]:
                     return 2
         else:
             if action_type == constants.GRASP:
@@ -1053,10 +1053,10 @@ class Agent():
             self.push_Q.train()
 
         if self.enable_bc:
-            loss_bc = self.compute_lla_Q_loss(action_type, self.buffer_replay_expert)
+            loss_bc = self.compute_lla_Q_loss(action_type, self.buffer_replay_expert, is_bc = True)
         
         if self.enable_rl:
-            loss_rl = self.compute_lla_Q_loss(action_type, self.buffer_replay)
+            loss_rl = self.compute_lla_Q_loss(action_type, self.buffer_replay, is_bc = False)
         
         if self.enable_bc and self.enable_rl:
             loss = loss_bc + loss_rl
@@ -1065,8 +1065,10 @@ class Agent():
         elif self.enable_bc:
             loss = loss_bc
         
-        print(f"[Q LLA UPDATE] loss_bc: {loss_bc}")
-        print(f"[Q LLA UPDATE] loss_bc: {loss_rl}")
+        if self.enable_bc:
+            print(f"[Q LLA UPDATE] loss_bc: {loss_bc}")
+        if self.enable_rl:
+            print(f"[Q LLA UPDATE] loss_bc: {loss_rl}")
         print(f"[Q LLA UPDATE] loss: {loss}")
 
         if action_type == constants.GRASP:
@@ -1074,13 +1076,13 @@ class Agent():
             loss.backward()
             self.grasp_Q.optimiser.step()
 
-            self.soft_update_Q(self.grasp_Q, self.grasp_Q_target)
+            self.soft_update_Q(self.grasp_Q, self.grasp_Q_target, self.tau)
         elif action_type == constants.PUSH:            
             self.push_Q.zero_grad()
             loss.backward()
             self.push_Q.optimiser.step()
 
-            self.soft_update_Q(self.push_Q, self.push_Q_target)
+            self.soft_update_Q(self.push_Q, self.push_Q_target, self.tau)
 
     #for research 1.0
     def online_update_lla(self, action_type):
@@ -1294,7 +1296,7 @@ class Agent():
 
         return critic1_loss, critic2_loss, critic1_loss_no_reduce, critic2_loss_no_reduce
 
-    def compute_lla_Q_loss(self, action_type, buffer_replay):
+    def compute_lla_Q_loss(self, action_type, buffer_replay, is_bc):
 
         #     0,                  1,                    2,                3,
         # batch, batch_depth_states, batch_gripper_states, batch_yaw_states, \
@@ -1309,6 +1311,7 @@ class Agent():
         
         batch_index = exp[0]
         action_batch = torch.FloatTensor(exp[4]).long().to(self.device)
+        next_action_batch = torch.FloatTensor(exp[6]).long().to(self.device)
         rewards = torch.FloatTensor(exp[8]).unsqueeze(1).to(self.device) 
         dones = torch.FloatTensor(exp[12]).unsqueeze(1).to(self.device)
         N_exp = len(batch_index)
@@ -1344,20 +1347,31 @@ class Agent():
         with torch.no_grad():
             if action_type == constants.GRASP:
                 # next_actions = self.hld_net(next_state_batch).argmax(dim=1).unsqueeze(0).long()
-                next_Qx, next_Qy, next_Qz, next_Qyaw = self.grasp_Q(next_state_batch)
-                next_actions_x = next_Qx.argmax(dim=1).long()
-                next_actions_y = next_Qy.argmax(dim=1).long()
-                next_actions_z = next_Qz.argmax(dim=1).long()
-                next_actions_yaw = next_Qyaw.argmax(dim=1).long()
+                if not is_bc:
+                    next_Qx, next_Qy, next_Qz, next_Qyaw = self.grasp_Q(next_state_batch)
+                    next_actions_x = next_Qx.argmax(dim=1).long()
+                    next_actions_y = next_Qy.argmax(dim=1).long()
+                    next_actions_z = next_Qz.argmax(dim=1).long()
+                    next_actions_yaw = next_Qyaw.argmax(dim=1).long()
+                else:
+                    next_actions_x = next_action_batch[:, 0]
+                    next_actions_y = next_action_batch[:, 1]
+                    next_actions_z = next_action_batch[:, 2]
+                    next_actions_yaw = next_action_batch[:, 3]
 
                 next_Qx, next_Qy, next_Qz, next_Qyaw = self.grasp_Q_target(next_state_batch)
             elif action_type == constants.PUSH:
-
-                next_Qx, next_Qy, next_Qz, next_Qyaw = self.push_Q(next_state_batch)
-                next_actions_x = next_Qx.argmax(dim=1).long()
-                next_actions_y = next_Qy.argmax(dim=1).long()
-                next_actions_z = next_Qz.argmax(dim=1).long()
-                next_actions_yaw = next_Qyaw.argmax(dim=1).long()
+                if not is_bc:
+                    next_Qx, next_Qy, next_Qz, next_Qyaw = self.push_Q(next_state_batch)
+                    next_actions_x = next_Qx.argmax(dim=1).long()
+                    next_actions_y = next_Qy.argmax(dim=1).long()
+                    next_actions_z = next_Qz.argmax(dim=1).long()
+                    next_actions_yaw = next_Qyaw.argmax(dim=1).long()
+                else:
+                    next_actions_x = next_action_batch[:, 0]
+                    next_actions_y = next_action_batch[:, 1]
+                    next_actions_z = next_action_batch[:, 2]
+                    next_actions_yaw = next_action_batch[:, 3]
 
                 next_Qx, next_Qy, next_Qz, next_Qyaw = self.push_Q_target(next_state_batch)
 
@@ -1815,9 +1829,7 @@ class Agent():
                             action_z = self.convert_action_to_action_index(action4d[0][2], self.action_type, True)
                             action_yaw = self.convert_action_to_action_index(action4d[0][3], self.action_type, False)
 
-                            action = [action_x, action_y, action_z, action_yaw]
-
-                            
+                            action = [action_x, action_y, action_z, action_yaw]  
                         else:
                             action = [action_x, action_y, action_z, action_yaw]
                             action4d = [self.convert_action_index_to_action(action[0], self.action_type, True), 
@@ -1825,8 +1837,6 @@ class Agent():
                                         self.convert_action_index_to_action(action[2], self.action_type, True),
                                         self.convert_action_index_to_action(action[3], self.action_type, False)]
                             action4d = torch.FloatTensor(action4d).unsqueeze(0).to(self.device)
-
-
 
                         #interact with env
                         action_to_env_step = action4d.to(torch.device('cpu')).detach().numpy()[0]
@@ -1846,6 +1856,11 @@ class Agent():
 
                     #check if action is done
                     action_done = self.is_action_done(i, N_step_low_level, is_pushed)                    
+                    if action_done:
+                        if self.action_type == constants.GRASP and not self.is_success_grasp:
+                            reward = -1.0
+                        elif self.action_type == constants.PUSH and not is_pushed:
+                            reward = -1.0
 
                     #get next state 
                     next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
