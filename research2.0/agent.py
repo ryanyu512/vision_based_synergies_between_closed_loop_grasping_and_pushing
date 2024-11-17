@@ -1799,10 +1799,11 @@ class Agent():
                         #interact with env
                         action_to_env_step = action4d.to(torch.device('cpu')).detach().numpy()[0]
 
-                    reward, self.is_success_grasp, is_grasped, is_pushed, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal = self.env.step(self.action_type, 
+                    reward, self.is_success_grasp, is_grasped, is_pushed, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal, action_done = self.env.step(self.action_type, 
                                                                                                                                                               action_to_env_step[0:3], 
                                                                                                                                                               action_to_env_step[3], 
-                                                                                                                                                              None)
+                                                                                                                                                              None, 
+                                                                                                                                                              i, N_step_low_level)
 
                     #print actions
                     print(f"[ACTION TYPE]: {self.action_type}")  
@@ -1812,13 +1813,13 @@ class Agent():
                     #check if episode is done
                     self.episode_done = False if self.env.N_pickable_item > 0 else True
 
-                    #check if action is done
-                    action_done = self.is_action_done(i, N_step_low_level, is_pushed)                    
-                    if action_done:
-                        if self.action_type == constants.GRASP and not self.is_success_grasp:
-                            reward = -1.0
-                        elif self.action_type == constants.PUSH and not is_pushed:
-                            reward = -1.0
+                    # #check if action is done
+                    # action_done = self.is_action_done(i, N_step_low_level, is_pushed)                    
+                    # if action_done:
+                    #     if self.action_type == constants.GRASP and not self.is_success_grasp:
+                    #         reward = -1.0
+                    #     elif self.action_type == constants.PUSH and not is_pushed:
+                    #         reward = -1.0
 
                     #get next state 
                     next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 

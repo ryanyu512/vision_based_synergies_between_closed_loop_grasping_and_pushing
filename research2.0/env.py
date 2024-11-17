@@ -654,9 +654,9 @@ class Env():
             
             if is_success_grasp:
                 reward += 1.0
-            else:
-                #CHANGE [NOTE 11/11/2024]: penalise incorrect grasping
-                reward +=-1.0
+            # else:
+            #     #CHANGE [NOTE 11/11/2024]: penalise incorrect grasping
+            #     reward +=-1.0
 
         print(f"[GRASP REWARD] R: {reward}")
 
@@ -701,9 +701,9 @@ class Env():
             elif push_non_clustered_item:
                 #give a very small reward for pushing non-clustered items
                 reward += 0.1
-            else:
-                #CHANGE [NOTE 11/11/2024]: penalise ineffective pushing
-                reward +=-1.0
+            # else:
+            #     #CHANGE [NOTE 11/11/2024]: penalise ineffective pushing
+            #     reward +=-1.0
         
         print(f"[PUSH REWARD] R: {reward}")
 
@@ -812,8 +812,6 @@ class Env():
         if self.is_out_of_working_space or self.is_collision_to_ground or self.gripper_cannot_operate or not self.can_execute_action:
             reward = -1.0
 
-        print(f"[OVERALL REWARD] {reward}")
-
         return reward, is_success_grasp, is_success_push
 
     def reward_hld(self, action_type, rewards_low_level, delta_moves_grasp, delta_moves_push):
@@ -851,7 +849,15 @@ class Env():
 
         return depth_img, gripper_status, yaw_ang
 
-    def step(self, action_type, delta_pos, delta_ori, is_open_gripper):
+    def is_action_done(self, step_low_level, N_step_low_level, is_success_grasp, is_pushed):
+        if (step_low_level == N_step_low_level - 1 or 
+            is_success_grasp or is_pushed or 
+            self.is_out_of_working_space or not self.can_execute_action or self.is_collision_to_ground or self.gripper_cannot_operate ):
+            return True
+        else:
+            return False   
+
+    def step(self, action_type, delta_pos, delta_ori, is_open_gripper, cur_step, N_step_low_level):
 
         is_success_grasp = False
 
@@ -942,11 +948,21 @@ class Env():
         if not self.can_execute_action and gripper_tip_pos[2] >= 0.1:
             reward = 0.
             print("[WARN] recorrect the reward")
-            print(f"[OVERALL REWARD] {reward}")
             print(f"[GRIPPER TIP HEIGHT] {gripper_tip_pos[2]}")
             is_sim_abnormal = True
 
-        return reward, is_success_grasp, is_grasped, is_pushed, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal
+        action_done = self.is_action_done(cur_step, N_step_low_level, is_success_grasp, is_pushed)
+
+        #penalise ineffective actions
+        if action_done and not is_sim_abnormal:
+            if action_type == constants.GRASP and not is_success_grasp:
+                reward = -1.0
+            elif action_type == constants.PUSH and not is_success_push:
+                reward = -1.0
+
+        print(f"[OVERALL REWARD] {reward}")
+
+        return reward, is_success_grasp, is_grasped, is_pushed, next_depth_img, next_gripper_state, next_yaw_state, is_sim_abnormal, action_done
     
     def return_home(self, is_env_reset, action_type = None):
 
