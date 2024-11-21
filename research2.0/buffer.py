@@ -87,11 +87,6 @@ class BufferReplay():
                          priority,
                          is_save_to_dir = True):
 
-        #update memory
-        if self.memory_cntr >= self.max_memory_size:
-            self.is_full = True
-            self.memory_cntr = 0
-
         #minus action type data size when the buffer is full before storing new experience
         if self.is_full:
             if self.action_types[self.memory_cntr] == constants.GRASP:
@@ -138,6 +133,18 @@ class BufferReplay():
 
         #update memory counter
         self.memory_cntr += 1
+
+        #update memory
+        if self.memory_cntr >= self.max_memory_size:
+            self.is_full = True
+            self.memory_cntr = 0
+
+        #save memory counter
+        data_dict_mem_counter = {'memory_cntr': self.memory_cntr}
+        file_name = os.path.join(self.checkpt_dir, "memory_cntr.pkl")
+
+        with open(file_name, 'wb') as file:
+            pickle.dump(data_dict_mem_counter, file)
 
     def get_experience_by_action_type(self, action_type):
 
@@ -271,6 +278,7 @@ class BufferReplay():
             checkpt_dir = self.checkpt_dir
 
         exp_dir = os.listdir(checkpt_dir)
+        exp_dir.remove('memory_cntr.pkl')
         exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
         sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
@@ -279,8 +287,15 @@ class BufferReplay():
 
         print(f"[LOAD BUFFER] data_length: {data_length}")
         #reinitialise memory size if the max memory size is less than data_length
-        if self.max_memory_size <= data_length:
-            self.init_mem_size(data_length) if self.max_memory_size < data_length else None
+        if self.max_memory_size == data_length:
+            self.is_full         = True
+            file_name = os.path.join(checkpt_dir, "memory_cntr.pkl")
+            with open(file_name, 'rb') as file:
+                data_dict = pickle.load(file)
+                self.memory_cntr = data_dict['memory_cntr']
+                print(f"lla memory_cntr: {self.memory_cntr}")
+        elif self.max_memory_size < data_length:
+            self.init_mem_size(data_length)
             self.max_memory_size = data_length
             self.is_full         = True 
             self.memory_cntr     = self.max_memory_size

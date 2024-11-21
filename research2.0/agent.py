@@ -380,7 +380,6 @@ class Agent():
         self.rewards.append(reward)
         self.action_dones.append(action_done)
 
-        print(priority)
         self.priorities.append(priority.to(torch.device('cpu')).detach().numpy() if priority is not None else priority)
 
         if self.is_debug:
@@ -799,23 +798,58 @@ class Agent():
 
         return priority
 
-    def compute_priority_Q(self, next_state, rewards, dones, Qx, Qy, Qz, Qyaw, nQx, nQy, nQz, nQyaw):
+    def compute_priority_Q(self, rewards, dones, 
+                           action_x, action_y, action_z, action_yaw,
+                           next_action_x, next_action_y, next_action_z, next_action_yaw,
+                           Qx, Qy, Qz, Qyaw, nQx, nQy, nQz, nQyaw, is_expert):
         #for research 2.0
-        target_Qx = rewards + (1 - dones)*nQx
-        target_Qy = rewards + (1 - dones)*nQy
-        target_Qz = rewards + (1 - dones)*nQz
-        target_Qyaw = rewards + (1 - dones)*nQyaw
+        target_Qx = rewards + (1 - dones)*nQx[next_action_x]
+        target_Qy = rewards + (1 - dones)*nQy[next_action_y]
+        target_Qz = rewards + (1 - dones)*nQz[next_action_z]
+        target_Qyaw = rewards + (1 - dones)*nQyaw[next_action_yaw]
 
-        q_loss = nn.MSELoss()(Qx, target_Qx) + \
-                 nn.MSELoss()(Qy, target_Qy) + \
-                 nn.MSELoss()(Qz, target_Qz) + \
-                 nn.MSELoss()(Qyaw, target_Qyaw)
+        q_loss = (nn.MSELoss()(Qx[action_x], target_Qx) + \
+                  nn.MSELoss()(Qy[action_y], target_Qy) + \
+                  nn.MSELoss()(Qz[action_z], target_Qz) + \
+                  nn.MSELoss()(Qyaw[action_yaw], target_Qyaw))/4.
         
-        print(f"target_Qx: {target_Qx} Qx: {Qx}")
-        print(f"target_Qy: {target_Qy} Qy: {Qy}")
-        print(f"target_Qz: {target_Qz} Qz: {Qz}")
-        print(f"target_Qyaw: {target_Qyaw} Qyaw: {Qyaw}")
-        
+        if self.is_debug and Qx.shape[0] != 3:
+            print(f"[ERROR] Qx.shape: {Qx.shape}")
+
+        if self.is_debug and nQx.shape[0] != 3:
+            print(f"[ERROR] target_Qx.shape: {target_Qx.shape}")
+            print(f"[ERROR] nQx.shape: {nQx.shape}")
+
+        margin = 0.1
+        loss_rank = None
+        if is_expert:
+            loss_rank_x = torch.clamp(Qx - Qx[action_x] + margin, min = 0)
+            loss_rank_y = torch.clamp(Qy - Qy[action_y] + margin, min = 0)
+            loss_rank_z = torch.clamp(Qz - Qz[action_z] + margin, min = 0)
+            loss_rank_yaw = torch.clamp(Qyaw - Qyaw[action_yaw] + margin, min = 0)
+            
+            loss_rank_x[action_x] = 0.
+            loss_rank_y[action_y] = 0.
+            loss_rank_z[action_z] = 0.
+            loss_rank_yaw[action_yaw] = 0.
+
+            if self.is_debug and loss_rank_x.shape[0] != 3:
+                print(f"[ERROR] loss_rank_x.shape: {loss_rank_x.shape}")
+                print(f"[ERROR] loss_rank_y.shape: {loss_rank_y.shape}")
+                print(f"[ERROR] loss_rank_z.shape: {loss_rank_z.shape}")
+                print(f"[ERROR] loss_rank_yaw.shape: {loss_rank_yaw.shape}")
+
+            loss_rank = (loss_rank_x.mean() + loss_rank_y.mean() + loss_rank_z.mean() + loss_rank_yaw.mean())/4.
+
+            q_loss += loss_rank
+
+        print(f"target_Qx: {target_Qx} Qx: {Qx[action_x]}")
+        print(f"target_Qy: {target_Qy} Qy: {Qy[action_y]}")
+        print(f"target_Qz: {target_Qz} Qz: {Qz[action_z]}")
+        print(f"target_Qyaw: {target_Qyaw} Qyaw: {Qyaw[action_yaw]}")
+        print(f"loss_rank: {loss_rank}")
+        print(f"priority: {q_loss}")
+
         return q_loss
 
     def compute_priority_hld(self, next_hld_state, hld_reward, current_hld_q):
@@ -1293,14 +1327,47 @@ class Agent():
                                                                               gripper_actions = exp[7])
 
         if action_type == constants.GRASP:
-            Qx, Qy, Qz, Qyaw = self.grasp_Q(state_batch)
+            cQx, cQy, cQz, cQyaw = self.grasp_Q(state_batch)
         elif action_type == constants.PUSH:
-            Qx, Qy, Qz, Qyaw = self.push_Q(state_batch)
+            cQx, cQy, cQz, cQyaw = self.push_Q(state_batch)
 
-        Qx = Qx[torch.arange(N_exp), action_batch[:, 0]].unsqueeze(1)
-        Qy = Qy[torch.arange(N_exp), action_batch[:, 1]].unsqueeze(1)
-        Qz = Qz[torch.arange(N_exp), action_batch[:, 2]].unsqueeze(1)
-        Qyaw = Qyaw[torch.arange(N_exp), action_batch[:, 3]].unsqueeze(1)
+        margin = 0.1
+        loss_rank = None
+        if is_bc:
+            loss_rank_x = torch.clamp(cQx - cQx[torch.arange(N_exp), action_batch[:, 0]].unsqueeze(1) + margin, 
+                                    min = 0)
+            loss_rank_y = torch.clamp(cQy - cQy[torch.arange(N_exp), action_batch[:, 1]].unsqueeze(1) + margin, 
+                                    min = 0)
+            loss_rank_z = torch.clamp(cQz - cQz[torch.arange(N_exp), action_batch[:, 2]].unsqueeze(1) + margin, 
+                                    min = 0)
+            loss_rank_yaw = torch.clamp(cQyaw - cQyaw[torch.arange(N_exp), action_batch[:, 3]].unsqueeze(1) + margin, 
+                                    min = 0)
+            
+            mask_x = torch.ones_like(loss_rank_x)
+            mask_x[torch.arange(N_exp), action_batch[:, 0]] = 0.
+
+            mask_y = torch.ones_like(loss_rank_y)
+            mask_y[torch.arange(N_exp), action_batch[:, 1]] = 0.
+
+            mask_z = torch.ones_like(loss_rank_z)
+            mask_z[torch.arange(N_exp), action_batch[:, 2]] = 0.
+
+            mask_yaw = torch.ones_like(loss_rank_yaw)
+            mask_yaw[torch.arange(N_exp), action_batch[:, 3]] = 0.
+
+            loss_rank_x = loss_rank_x*mask_x
+            loss_rank_y = loss_rank_y*mask_y
+            loss_rank_z = loss_rank_z*mask_z
+            loss_rank_yaw = loss_rank_yaw*mask_yaw
+
+            loss_rank = (loss_rank_x.mean() + loss_rank_y.mean() + loss_rank_z.mean() + loss_rank_yaw.mean())/4.
+        
+        print(f"loss_rank: {loss_rank}")
+
+        Qx = cQx[torch.arange(N_exp), action_batch[:, 0]].unsqueeze(1)
+        Qy = cQy[torch.arange(N_exp), action_batch[:, 1]].unsqueeze(1)
+        Qz = cQz[torch.arange(N_exp), action_batch[:, 2]].unsqueeze(1)
+        Qyaw = cQyaw[torch.arange(N_exp), action_batch[:, 3]].unsqueeze(1)
 
         with torch.no_grad():
             if action_type == constants.GRASP:
@@ -1343,11 +1410,16 @@ class Agent():
             target_Qz = rewards + (1 - dones)*next_Qz
             target_Qyaw = rewards + (1 - dones)*next_Qyaw
 
-        loss = nn.MSELoss()(Qx, target_Qx) + \
-               nn.MSELoss()(Qy, target_Qy) + \
-               nn.MSELoss()(Qz, target_Qz) + \
-               nn.MSELoss()(Qyaw, target_Qyaw)
+        loss_x = nn.MSELoss()(Qx, target_Qx)
+        loss_y = nn.MSELoss()(Qy, target_Qy)
+        loss_z = nn.MSELoss()(Qz, target_Qz)
+        loss_yaw = nn.MSELoss()(Qyaw, target_Qyaw)
+
+        loss = (loss_x + loss_y + loss_z + loss_yaw)/4.
         
+        if is_bc:
+            loss += loss_rank
+
         if self.is_debug:
             if target_Qx.shape[1] != 1:
                 print("[ERROR] target_Qx.shape[1] != 1") 
@@ -1813,14 +1885,6 @@ class Agent():
                     #check if episode is done
                     self.episode_done = False if self.env.N_pickable_item > 0 else True
 
-                    # #check if action is done
-                    # action_done = self.is_action_done(i, N_step_low_level, is_pushed)                    
-                    # if action_done:
-                    #     if self.action_type == constants.GRASP and not self.is_success_grasp:
-                    #         reward = -1.0
-                    #     elif self.action_type == constants.PUSH and not is_pushed:
-                    #         reward = -1.0
-
                     #get next state 
                     next_in_depth_img, _, next_in_yaw_state = self.preprocess_state(depth_img = next_depth_img, 
                                                                                     gripper_state = next_gripper_state, 
@@ -1894,16 +1958,16 @@ class Agent():
 
                         
                         #compute priority for experience
-                        priority = self.compute_priority_Q(next_state, reward, action_done, 
-                                                           Qx[0][action_x], Qy[0][action_y], Qz[0][action_z], Qyaw[0][action_yaw], 
-                                                           next_Qx[0][next_action_x], next_Qy[0][next_action_y], next_Qz[0][next_action_z], next_Qyaw[0][next_action_yaw])
+                        priority = self.compute_priority_Q(reward, action_done, 
+                                                           action_x, action_y, action_z, action_yaw,
+                                                           next_action_x, next_action_y, next_action_z, next_action_yaw,
+                                                           Qx[0], Qy[0], Qz[0], Qyaw[0], 
+                                                           next_Qx[0], next_Qy[0], next_Qz[0], next_Qyaw[0], is_expert)
 
                         #store experience during executing low-level action
                         self.append_lla_exp(depth_img, gripper_state, yaw_state, next_depth_img, next_gripper_state, next_yaw_state, 
                                             action, next_action, 
                                             self.action_type, reward, action_done, priority)
-
-                    print(f"[PRIORITY] {priority}")
 
                     #check if episode_done
                     if self.episode_done:

@@ -64,11 +64,6 @@ class BufferReplay_HLD():
                          critic_loss,
                          is_save_to_dir = True):
 
-        #update memory
-        if self.memory_cntr >= self.max_memory_size:
-            self.is_full = True
-            self.memory_cntr = 0
-
         self.N_data += 1
         if self.N_data >= self.max_memory_size:
             self.N_data = self.max_memory_size
@@ -90,6 +85,17 @@ class BufferReplay_HLD():
 
         #update memory counter
         self.memory_cntr += 1
+
+        if self.memory_cntr >= self.max_memory_size:
+            self.is_full = True
+            self.memory_cntr = 0
+
+        #save memory counter
+        data_dict_mem_counter = {'memory_cntr': self.memory_cntr}
+        file_name = os.path.join(self.checkpt_dir, "memory_cntr.pkl")
+
+        with open(file_name, 'wb') as file:
+            pickle.dump(data_dict_mem_counter, file)
 
     def get_experience(self):
 
@@ -184,6 +190,7 @@ class BufferReplay_HLD():
 
         #get all the file names in the checkpoint directory
         exp_dir = os.listdir(self.checkpt_dir)
+        exp_dir.remove('memory_cntr.pkl')
         exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
         sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
@@ -192,9 +199,15 @@ class BufferReplay_HLD():
 
         print(f"[LOAD HLD BUFFER] data_length: {data_length}")
         #reinitialise memory size if the max memory size is less than data_length
-        if self.max_memory_size <= data_length:
-            if self.max_memory_size < data_length:
-                self.init_mem_size(data_length)  
+        if self.max_memory_size == data_length:  
+            self.is_full = True 
+            file_name = os.path.join(checkpt_dir, "memory_cntr.pkl")
+            with open(file_name, 'rb') as file:
+                data_dict = pickle.load(file)
+                self.memory_cntr = data_dict['memory_cntr']
+                print(f"hld memory_cntr: {self.memory_cntr}")
+        elif self.max_memory_size < data_length:
+            self.init_mem_size(data_length)  
             self.max_memory_size = data_length
             self.is_full = True 
             self.memory_cntr = self.max_memory_size

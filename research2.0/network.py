@@ -565,6 +565,10 @@ class QNet(nn.Module):
     def get_actions(self, state, take_max = False):
         
         Qx, Qy, Qz, Qyaw = self.forward(state)
+        print(f"Qx: {Qx}")
+        print(f"Qy: {Qy}")
+        print(f"Qz: {Qz}")
+        print(f"Qyaw: {Qyaw}")
 
         prob = random.random()
 

@@ -701,9 +701,9 @@ class Env():
             elif push_non_clustered_item:
                 #give a very small reward for pushing non-clustered items
                 reward += 0.1
-            # else:
-            #     #CHANGE [NOTE 11/11/2024]: penalise ineffective pushing
-            #     reward +=-1.0
+            else:
+                #CHANGE [NOTE 11/11/2024]: penalise ineffective pushing
+                reward +=-1.0
         
         print(f"[PUSH REWARD] R: {reward}")
 
@@ -817,7 +817,9 @@ class Env():
     def reward_hld(self, action_type, rewards_low_level, delta_moves_grasp, delta_moves_push):
         
         if action_type == constants.GRASP:
-            if np.max(rewards_low_level) > 0:
+            #1st condition: agent can grasp non-separated objects
+            #2nd condition: separated objects exist
+            if np.max(rewards_low_level) > 0 or len(delta_moves_grasp) > 0:
                 hld_reward =  1.0 
             else:
                 hld_reward = -1.0 
@@ -945,7 +947,7 @@ class Env():
         #TODO [NOTE 11/11/2024] cannot execute the action even if the output is normal, not sure why
         #current solution: reset the reward to ensure it does not affect the overall learning
         is_sim_abnormal = False
-        if not self.can_execute_action and gripper_tip_pos[2] >= 0.1:
+        if not self.can_execute_action and cur_step == 0:
             reward = 0.
             print("[WARN] recorrect the reward")
             print(f"[GRIPPER TIP HEIGHT] {gripper_tip_pos[2]}")
@@ -957,7 +959,7 @@ class Env():
         if action_done and not is_sim_abnormal:
             if action_type == constants.GRASP and not is_success_grasp:
                 reward = -1.0
-            elif action_type == constants.PUSH and not is_success_push:
+            elif action_type == constants.PUSH and not is_pushed:
                 reward = -1.0
 
         print(f"[OVERALL REWARD] {reward}")
