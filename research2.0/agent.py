@@ -1027,6 +1027,8 @@ class Agent():
         # self.buffer_replay_hld.update_buffer(exp[0], 
         #                                      nn.MSELoss(reduction = 'none')(q_values, target_q_values).to(torch.device('cpu')).detach().numpy()[0])
 
+        print(f"q_values.shape: {q_values.shape} target_q_values.shape: {target_q_values.shape}")
+        print(f"next_q_values.shape: {next_q_values.shape} reward_batch.shape: {reward_batch.shape} done_batch.shape: {done_batch.shape}")
         print(f"[Q HLD UPDATE] loss: {loss}")
 
         if self.is_debug:
@@ -1421,6 +1423,11 @@ class Agent():
         
         if is_bc:
             loss += loss_rank
+
+        print(f"Qx.shape: {Qx.shape} target_Qx.shape: {target_Qx.shape}")
+        print(f"Qy.shape: {Qy.shape} target_Qy.shape: {target_Qy.shape}")
+        print(f"Qz.shape: {Qz.shape} target_Qz.shape: {target_Qz.shape}")
+        print(f"Qyaw.shape: {Qyaw.shape} target_Qyaw.shape: {target_Qyaw.shape}")
 
         if self.is_debug:
             if target_Qx.shape[1] != 1:
