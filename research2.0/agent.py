@@ -1027,6 +1027,8 @@ class Agent():
         # self.buffer_replay_hld.update_buffer(exp[0], 
         #                                      nn.MSELoss(reduction = 'none')(q_values, target_q_values).to(torch.device('cpu')).detach().numpy()[0])
 
+        print(f"[Q HLD UPDATE] loss: {loss}")
+
         if self.is_debug:
             print('[SUCCESS] online update')
 

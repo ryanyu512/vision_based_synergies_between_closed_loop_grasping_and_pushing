@@ -83,20 +83,6 @@ class BufferReplay_HLD():
 
             self.add_one_exp_to_dir(data_dict)
 
-        #update memory counter
-        self.memory_cntr += 1
-
-        if self.memory_cntr >= self.max_memory_size:
-            self.is_full = True
-            self.memory_cntr = 0
-
-        #save memory counter
-        data_dict_mem_counter = {'memory_cntr': self.memory_cntr}
-        file_name = os.path.join(self.checkpt_dir, "memory_cntr.pkl")
-
-        with open(file_name, 'wb') as file:
-            pickle.dump(data_dict_mem_counter, file)
-
     def get_experience(self):
 
         #get max_ind for sampling range
@@ -136,14 +122,25 @@ class BufferReplay_HLD():
 
     def add_one_exp_to_dir(self, data_dict):
 
-        if self.data_length >= self.max_memory_size:
-            self.data_length  = 0
-
-        file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{self.data_length}" + ".pkl")
+        file_name = os.path.join(self.checkpt_dir, "experience_data" + f"_{self.memory_cntr}" + ".pkl")
 
         with open(file_name, 'wb') as file:
             pickle.dump(data_dict, file)
-            self.data_length += 1
+            print(f"[HLD BUFFER] data saved {self.memory_cntr+1}/{self.max_memory_size}")
+
+        #update memory counter
+        self.memory_cntr += 1
+
+        if self.memory_cntr >= self.max_memory_size:
+            self.is_full = True
+            self.memory_cntr = 0
+
+        #save memory counter
+        data_dict_mem_counter = {'memory_cntr': self.memory_cntr}
+        file_name = os.path.join(self.checkpt_dir, "memory_cntr.pkl")
+
+        with open(file_name, 'wb') as file:
+            pickle.dump(data_dict_mem_counter, file)
 
     def update_one_exp_to_dir(self, data_dict, sample_index):
 
@@ -158,6 +155,7 @@ class BufferReplay_HLD():
 
         #get all the file names in the checkpoint directory
         exp_dir = os.listdir(self.checkpt_dir)
+        exp_dir.remove('memory_cntr.pkl')
         exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
         sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
