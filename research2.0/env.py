@@ -352,7 +352,7 @@ class Env():
                                                                          yc=self.y_center,
                                                                          xL=0.035,
                                                                          yL=0.035)
-                            time.sleep(0.5)
+                            time.sleep(0.1)
                             if self.is_within_working_space(item_pos, margin = 0.):
                                 break
                     else:

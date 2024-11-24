@@ -122,9 +122,12 @@ class HDL_Net(nn.Module):
             
         return q_values, index
 
-    def save_checkpoint(self, is_best = False):
+    def save_checkpoint(self, is_best = False, name = None):
         if is_best:
             torch.save(self.state_dict(), self.checkpt_file)
+        elif not is_best and name is not None:
+            checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_' + name + '_checkpt'))
+            torch.save(self.state_dict(), checkpt_file)
         else:
             checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir,  self.name + '_checkpt'))
             torch.save(self.state_dict(), checkpt_file)
@@ -528,7 +531,7 @@ class QNet(nn.Module):
         self.name = name
         if not os.path.exists(self.checkpt_dir):
             os.makedirs(self.checkpt_dir)
-        self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name+ '_Q'))
+        self.checkpt_file = os.path.abspath(os.path.join(self.checkpt_dir, name))
 
         #initialise optimiser
         self.optimiser = optim.Adam(self.parameters(), lr = lr)

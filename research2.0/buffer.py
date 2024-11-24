@@ -51,14 +51,14 @@ class BufferReplay():
 
         self.is_debug = is_debug
 
-        try:
-            if load_checkpt_dir is None:
-                self.load_exp_from_dir()
-            else:
-                self.load_exp_from_dir(load_checkpt_dir)
-                print("[SUCCESS] load low-level buffer")
-        except:
-            print("[FAIL] cannot load low-level buffer")
+        # try:
+        #     if load_checkpt_dir is None:
+        self.load_exp_from_dir()
+        #     else:
+        #         self.load_exp_from_dir(load_checkpt_dir)
+        #         print("[SUCCESS] load low-level buffer")
+        # except:
+        #     print("[FAIL] cannot load low-level buffer")
 
     def init_mem_size(self, max_memory_size):
 
@@ -207,11 +207,14 @@ class BufferReplay():
         if checkpt_dir is None:
             checkpt_dir = self.checkpt_dir
 
-        #get experience directory
-        exp_dir = os.listdir(checkpt_dir)
-        exp_dir.remove('memory_cntr.pkl')
-        exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
-        sort_exp_dir = np.array(exp_dir)[exp_sort_index]
+        # #get experience directory
+        # exp_dir = os.listdir(checkpt_dir)
+        # try:
+        #     exp_dir.remove('memory_cntr.pkl')
+        # except:
+        #     print("no memory_cntr.pkl")
+        # exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
+        # sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
         #get batch size
         batch_size = len(batch_index)
@@ -247,9 +250,16 @@ class BufferReplay():
         #indicate if this experience is a successful experience
         self.batch_success_mask = np.zeros(batch_size, dtype = bool)
 
+        # is_same = True
         for i in range(len(batch_index)):
             self.batch[i] = action_index[batch_index[i]]
-            file_name = os.path.join(checkpt_dir, sort_exp_dir[self.batch[i]])
+            # file_name_check = os.path.join(checkpt_dir, sort_exp_dir[self.batch[i]])
+            file_name = os.path.join(checkpt_dir, f"experience_data_{self.batch[i]}.pkl")
+
+            # if file_name != file_name_check:
+            #     is_same = False
+            #     print("[ERROR] is_same = False")
+
             with open(file_name, 'rb') as file:
                 data_dict = pickle.load(file)
 
@@ -268,13 +278,18 @@ class BufferReplay():
                 self.batch_dones[i] = data_dict['done']              
                 self.batch_success_mask[i] = data_dict['success_mask'] 
 
+        
+
     def load_exp_from_dir(self, checkpt_dir = None):
 
         if checkpt_dir is None:
             checkpt_dir = self.checkpt_dir
 
         exp_dir = os.listdir(checkpt_dir)
-        exp_dir.remove('memory_cntr.pkl')
+        try:
+            exp_dir.remove('memory_cntr.pkl')
+        except:
+            print("no memory_cntr.pkl")
         exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
         sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 

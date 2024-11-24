@@ -62,6 +62,7 @@ class Agent():
                  max_result_window_eval = 100, #the maximum record length for high-level decision network (in eval)
                  gripper_loss_weight = 1.0, #used for preventing ce loss too dominating
                  is_debug = False, #define if show debug message
+                 backup_interval = 5, #backup agent and model every 5 episodes
                  checkpt_dir_agent = 'logs/agent', #checkpoint directory for agent data
                  checkpt_dir_models = 'logs/models', #checkpoint directory for model data
                  exp_dir_expert = 'logs/exp_expert', #directory for expert experience
@@ -173,6 +174,9 @@ class Agent():
 
         #initialise if debug
         self.is_debug = is_debug
+
+        #define back up interval
+        self.backup_interval = backup_interval
 
         #define if the agent is in evaluation mode
         self.is_eval = None
@@ -1581,6 +1585,10 @@ class Agent():
 
         self.hld_net.save_checkpoint()
         self.hld_net_target.save_checkpoint()
+
+        if self.episode%self.backup_interval == 0:
+            self.hld_net.save_checkpoint(name = "backup")
+            self.hld_net_target.save_checkpoint(name = "backup")
         print("[SUCCESS] save hld models check point")
 
     def save_models(self, action_type, episode_done, is_expert, save_name = None):
@@ -1608,6 +1616,7 @@ class Agent():
                 elif self.lla_mode == constants.BC_RL:
                     self.push_Q.save_checkpoint(True)
                     self.push_Q_target.save_checkpoint(True)
+
                 print("[SUCCESS] save best push models")
 
         if episode_done or save_name is not None:
@@ -1622,8 +1631,16 @@ class Agent():
                 print("[SUCCESS] save grasp models check point")
                 self.push_Q.save_checkpoint(name=save_name)
                 self.push_Q_target.save_checkpoint(name=save_name)
-                print("[SUCCESS] save push models check point")    
-        
+                print("[SUCCESS] save push models check point")   
+
+                if self.episode%self.backup_interval == 0:
+                    self.grasp_Q.save_checkpoint(name="backup")
+                    self.grasp_Q_target.save_checkpoint(name="backup")
+                    print("[SUCCESS] save grasp models backup check point")
+                    self.push_Q.save_checkpoint(name="backup")
+                    self.push_Q_target.save_checkpoint(name="backup")
+                    print("[SUCCESS] save push models backup check point")
+
     def load_models(self):
         
         #load hld-net
@@ -1683,7 +1700,7 @@ class Agent():
         except:
             print("[FAIL] load push model")
 
-    def save_agent_data(self):
+    def save_agent_data(self, is_backup = False):
 
         if self.is_eval:
             file_name = os.path.join(self.checkpt_dir_agent, f"agent_data_eval_{self.hld_mode}.pkl")
@@ -1698,7 +1715,10 @@ class Agent():
                 'eval_index': self.eval_index, 
             }
         else:
-            file_name = os.path.join(self.checkpt_dir_agent, "agent_data.pkl")
+            if is_backup:
+                file_name = os.path.join(self.checkpt_dir_agent, f"agent_data_backup_{self.episode}.pkl")
+            else:
+                file_name = os.path.join(self.checkpt_dir_agent, "agent_data.pkl")
 
             data_dict = {
 
@@ -2054,3 +2074,7 @@ class Agent():
 
             #save agent data
             self.save_agent_data()
+
+            #save backup agent data to prevent sudden crash
+            if self.episode%self.backup_interval == 0:
+                self.save_agent_data(True)

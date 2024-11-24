@@ -153,11 +153,14 @@ class BufferReplay_HLD():
         if checkpt_dir is None:
             checkpt_dir = self.checkpt_dir
 
-        #get all the file names in the checkpoint directory
-        exp_dir = os.listdir(self.checkpt_dir)
-        exp_dir.remove('memory_cntr.pkl')
-        exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
-        sort_exp_dir = np.array(exp_dir)[exp_sort_index]
+        # #get all the file names in the checkpoint directory
+        # exp_dir = os.listdir(self.checkpt_dir)
+        # try:
+        #     exp_dir.remove('memory_cntr.pkl')
+        # except:
+        #     print("no memory_cntr.pkl")
+        # exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
+        # sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
         #current depth state
         self.batch_depth_states = np.zeros((len(batch_index), self.img_size, self.img_size))
@@ -171,7 +174,9 @@ class BufferReplay_HLD():
         self.batch_dones = np.zeros(len(batch_index), dtype = bool)
 
         for i in range(len(batch_index)):
-            file_name = os.path.join(self.checkpt_dir, sort_exp_dir[batch_index[i]])
+            # file_name = os.path.join(self.checkpt_dir, sort_exp_dir[batch_index[i]])
+            file_name = os.path.join(checkpt_dir, f"experience_data_{batch_index[i]}.pkl")
+
             with open(file_name, 'rb') as file:
                 data_dict = pickle.load(file)
 
@@ -188,7 +193,10 @@ class BufferReplay_HLD():
 
         #get all the file names in the checkpoint directory
         exp_dir = os.listdir(self.checkpt_dir)
-        exp_dir.remove('memory_cntr.pkl')
+        try:
+            exp_dir.remove('memory_cntr.pkl')
+        except:
+            print("no memory_cntr.pkl")
         exp_sort_index = np.argsort([int(e.split('.')[0].split('_')[-1]) for e in exp_dir])
         sort_exp_dir = np.array(exp_dir)[exp_sort_index]
 
