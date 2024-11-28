@@ -278,8 +278,6 @@ class BufferReplay():
                 self.batch_dones[i] = data_dict['done']              
                 self.batch_success_mask[i] = data_dict['success_mask'] 
 
-        
-
     def load_exp_from_dir(self, checkpt_dir = None):
 
         if checkpt_dir is None:

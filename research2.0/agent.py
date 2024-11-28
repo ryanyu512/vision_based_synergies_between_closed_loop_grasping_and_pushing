@@ -107,8 +107,8 @@ class Agent():
         self.exp_dir_hld = os.path.abspath(exp_dir_hld)
 
         #initialise high level network
-        self.hld_net = HDL_Net(name = "hld_net", N_input_channels = 1, lr = lr, checkpt_dir = self.checkpt_dir_models)
-        self.hld_net_target = HDL_Net(name = "hld_net_target", N_input_channels = 1, lr = lr, checkpt_dir = self.checkpt_dir_models)
+        self.hld_net = HDL_Net(name = "hld_net", N_input_channels = 1, lr = hld_lr, checkpt_dir = self.checkpt_dir_models)
+        self.hld_net_target = HDL_Net(name = "hld_net_target", N_input_channels = 1, lr = hld_lr, checkpt_dir = self.checkpt_dir_models)
         self.hld_mode = constants.HLD_MODE
 
         #[RESEARCH 1.0]
@@ -129,10 +129,10 @@ class Agent():
 
         #[RESEARCH 2.0]
         #initialise grasp Q network
-        self.grasp_Q = QNet(name = "grasp_QNet", checkpt_dir = self.checkpt_dir_models)
-        self.grasp_Q_target = QNet(name = "grasp_QNet_target", checkpt_dir = self.checkpt_dir_models)
-        self.push_Q = QNet(name = "push_QNet", checkpt_dir = self.checkpt_dir_models)
-        self.push_Q_target = QNet(name = "push_QNet_target", checkpt_dir = self.checkpt_dir_models)
+        self.grasp_Q = QNet(name = "grasp_QNet", lr = lr, checkpt_dir = self.checkpt_dir_models)
+        self.grasp_Q_target = QNet(name = "grasp_QNet_target", lr = lr, checkpt_dir = self.checkpt_dir_models)
+        self.push_Q = QNet(name = "push_QNet", lr = lr, checkpt_dir = self.checkpt_dir_models)
+        self.push_Q_target = QNet(name = "push_QNet_target", lr = lr, checkpt_dir = self.checkpt_dir_models)
 
         #soft update to make critic target align with critic
         self.soft_update(critic = self.hld_net, target_critic = self.hld_net_target)
@@ -901,6 +901,8 @@ class Agent():
                 #if expert mode's motion is not executable + agent fails => 
                 #infinite loop => reset the items on the ground
                 self.env.reset(reset_item = True)
+                #reset the number of action taken to zero
+                self.N_action_taken = 0 
             else:
                 self.env.reset(reset_item = False)
 

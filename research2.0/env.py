@@ -809,7 +809,7 @@ class Env():
         #check if the tipper is out of working space
         self.check_is_out_of_workingspace(gripper_tip_pos)
 
-        if self.is_out_of_working_space or self.is_collision_to_ground or self.gripper_cannot_operate or not self.can_execute_action:
+        if self.is_out_of_working_space or self.is_collision_to_ground or (self.gripper_cannot_operate and reward < 0) or not self.can_execute_action:
             reward = -1.0
 
         return reward, is_success_grasp, is_success_push
@@ -817,19 +817,22 @@ class Env():
     def reward_hld(self, action_type, rewards_low_level, delta_moves_grasp, delta_moves_push):
         
         if action_type == constants.GRASP:
-            #1st condition: agent can grasp non-separated objects
-            #2nd condition: separated objects exist
-            if np.max(rewards_low_level) > 0 or len(delta_moves_grasp) > 0:
-                hld_reward =  1.0 
+            if np.max(rewards_low_level) > 0:
+                hld_reward =  1.0 #correct decision, correct action
+            elif len(delta_moves_grasp) > 0 and np.max(rewards_low_level) <= 0:
+                hld_reward = 0.0 #correct decision, incorrect action
             else:
-                hld_reward = -1.0 
+                hld_reward = -1.0  
         else:
             if len(delta_moves_grasp) > 0 and len(delta_moves_push) > 0:
-                hld_reward =  0.0 #for neutral push decision
+                hld_reward =  0.0 #neutral decision
             elif len(delta_moves_grasp) > 0 and len(delta_moves_push) == 0:
-                hld_reward = -1.0 #for incorrect push decision                               
+                hld_reward = -1.0 #incorrect decision                               
             elif len(delta_moves_grasp) == 0 and len(delta_moves_push) > 0:
-                hld_reward =  0.5 #for correct push decision
+                if np.max(rewards_low_level) > 0:
+                    hld_reward = 0.5 #correct decision + correct action
+                else:
+                    hld_reward = 0.0 #correct decision + incorrect action
 
         if self.N_pickable_item <= 0:
             hld_reward += 5.0
