@@ -2023,7 +2023,8 @@ class Agent():
                 
                 print("=== end of action ===")
                 #update number of action taken
-                self.N_action_taken += 1
+                if not is_sim_abnormal:
+                    self.N_action_taken += 1
 
                 #return home
                 self.env.return_home(self.is_env_reset, self.action_type)

@@ -949,8 +949,9 @@ class Env():
 
         #TODO [NOTE 11/11/2024] cannot execute the action even if the output is normal, not sure why
         #current solution: reset the reward to ensure it does not affect the overall learning
+        #assume the first 5 steps are normal
         is_sim_abnormal = False
-        if not self.can_execute_action and cur_step == 0:
+        if not self.can_execute_action and cur_step < 5:
             reward = 0.
             print("[WARN] recorrect the reward")
             print(f"[GRIPPER TIP HEIGHT] {gripper_tip_pos[2]}")

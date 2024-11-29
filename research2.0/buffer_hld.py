@@ -207,11 +207,14 @@ class BufferReplay_HLD():
         #reinitialise memory size if the max memory size is less than data_length
         if self.max_memory_size == data_length:  
             self.is_full = True 
-            file_name = os.path.join(checkpt_dir, "memory_cntr.pkl")
-            with open(file_name, 'rb') as file:
-                data_dict = pickle.load(file)
-                self.memory_cntr = data_dict['memory_cntr']
-                print(f"hld memory_cntr: {self.memory_cntr}")
+            try:
+                file_name = os.path.join(checkpt_dir, "memory_cntr.pkl")
+                with open(file_name, 'rb') as file:
+                    data_dict = pickle.load(file)
+                    self.memory_cntr = data_dict['memory_cntr']
+                    print(f"hld memory_cntr: {self.memory_cntr}")
+            except:
+                self.memory_cntr  = 0
         elif self.max_memory_size < data_length:
             self.init_mem_size(data_length)  
             self.max_memory_size = data_length
