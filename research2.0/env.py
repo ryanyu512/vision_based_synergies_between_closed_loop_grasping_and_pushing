@@ -948,8 +948,11 @@ class Env():
             self.item_data_dict['min_d'][i] = min_distance
 
         #TODO [NOTE 11/11/2024] cannot execute the action even if the output is normal, not sure why
-        #current solution: reset the reward to ensure it does not affect the overall learning
-        #assume the first 5 steps are normal
+        #current solution: 
+        #reset the reward to ensure it does not affect the overall learning
+        #assume the first 5 steps are normal since cannot reach any object or out of operation range
+        #the above are the usual reasons for cannot executing action
+        #x & y: = +- 5 and z = +- 10
         is_sim_abnormal = False
         if not self.can_execute_action and cur_step < 5:
             reward = 0.

@@ -1577,7 +1577,8 @@ class Agent():
 
             print("[SUCCESS] save best hld models")
 
-        elif self.best_CR_train == complete_rate_train and ATC_mean_train < self.best_ATC_mean_train:
+        #save model even when the ATC_mean_train == self.best_ATC_mean_train to save the learning progress
+        elif self.best_CR_train == complete_rate_train and ATC_mean_train <= self.best_ATC_mean_train:
             self.best_ATC_mean_train = ATC_mean_train
             self.best_CR_train = complete_rate_train
             self.hld_net.save_checkpoint(True)
@@ -1599,7 +1600,8 @@ class Agent():
             #save grasp network
             grasp_success_rate = np.sum(self.grasp_record_list)/self.max_result_window
             
-            if not is_expert and self.best_grasp_success_rate < grasp_success_rate:
+            #save model even when the grasp_success_rate = self.best_grasp_success_rate to save the learning progress
+            if not is_expert and grasp_success_rate >= self.best_grasp_success_rate:
                 self.best_grasp_success_rate = grasp_success_rate
                 if self.lla_mode == constants.BC_ONLY:
                     self.grasp_actor.save_checkpoint(True)
@@ -1610,8 +1612,9 @@ class Agent():
         elif action_type == constants.PUSH:
             #save push network
             push_success_rate = np.sum(self.push_record_list)/self.max_result_window
- 
-            if not is_expert and self.best_push_success_rate < push_success_rate:
+
+            #save model even when the push_success_rate = self.best_push_success_rate to save the learning progress
+            if not is_expert and push_success_rate >= self.best_push_success_rate:
                 self.best_push_success_rate = push_success_rate
                 if self.lla_mode == constants.BC_ONLY:
                     self.push_actor.save_checkpoint(True)
@@ -2022,7 +2025,7 @@ class Agent():
                         break
                 
                 print("=== end of action ===")
-                #update number of action taken
+                #update number of action taken if simulation is normal
                 if not is_sim_abnormal:
                     self.N_action_taken += 1
 
