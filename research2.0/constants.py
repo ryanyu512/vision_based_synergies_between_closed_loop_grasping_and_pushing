@@ -73,6 +73,7 @@ print(f"[MAX_POSSIBLE_DIST]: {MAX_POSSIBLE_DIST}")
 HLD_MODE = 0
 GRASP_ONLY = 1
 SEQ_GRASP_PUSH = 2
+DEMO_MODE = 3
 
 #define low-level action training mode
 BC_ONLY = 0

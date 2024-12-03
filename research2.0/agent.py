@@ -563,7 +563,7 @@ class Agent():
             #get demonstration movement
             demo_low_level_actions = delta_moves_grasp if self.action_type == constants.GRASP else delta_moves_push
 
-        elif not self.is_full_train and not self.is_eval and self.hld_mode == constants.HLD_MODE:
+        elif (not self.is_full_train and not self.is_eval and self.hld_mode == constants.HLD_MODE) or (self.is_eval and self.hld_mode == constants.DEMO_MODE):
 
             if len(delta_moves_grasp) > 0:
                 demo_low_level_actions = delta_moves_grasp
@@ -761,6 +761,8 @@ class Agent():
                 self.push_fail_counter = 0
             if self.action_type == constants.GRASP and self.grasp_fail_counter >= 1:
                 self.grasp_fail_counter = 0
+        elif self.is_eval and self.hld_mode == constants.DEMO_MODE:
+            is_expert = True
         else:
             is_expert = False
         
@@ -1718,6 +1720,7 @@ class Agent():
                 'ATC_eval': self.ATC_eval,
 
                 'eval_index': self.eval_index, 
+                'episode': self.episode,
             }
         else:
             if is_backup:
@@ -1775,6 +1778,7 @@ class Agent():
                 self.AGS_eval = data_dict['AGS_eval']
                 self.ATC_eval = data_dict['ATC_eval']
                 self.eval_index = data_dict['eval_index']
+                self.episode = data_dict['episode']
                 
         else:
             file_name = os.path.join(self.checkpt_dir_agent, "agent_data.pkl")
@@ -2045,7 +2049,7 @@ class Agent():
                     print("[FAIL] GRASP OR PUSH ACTION")
 
                 #record success rate for low-level action network
-                if not is_sim_abnormal and not is_expert:
+                if (not is_sim_abnormal and not is_expert) or (self.is_eval and self.hld_mode == constants.DEMO_MODE):
 
                     #record success rate of low-level actions network
                     self.record_success_rate(self.action_type, self.rewards, delta_moves_grasp, delta_moves_push)
