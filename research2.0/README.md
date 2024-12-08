@@ -10,17 +10,17 @@ Even though recent robotics research has made great progress, coordination betwe
 =============
 
 | Proposed System | Grasping-only Baseline | 
-|------------|------------|
-| ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9)  |  ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9)
-| Sequential Grasp-Push Baseline | Demo Baseline | 
-| ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) |  ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) 
+|-----------------|------------------------|
+| ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9)  |  ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9) |
+| <div style="text-align:center">Sequential Grasp-Push Baseline</div> | <div style="text-align:center">Demo Baseline</div> | 
+| ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) |  ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) |
 
 **Code Overview**
 ---------------
 
 1. research2.0_train.ipynb: Used for training the proposed system
 2. research2.0_eval.ipynb: Used for evaluating the proposed system and baselines
-3. env.py: define the functions of environment, such as raw data extraction and reward
+3. env.py: define the functions of the environment, such as raw data extraction and reward
 4. agent.py: define the functions of agent, such as interaction with the environment and networks' update
 5. network.py: define the proposed networks
 6. buffer.py: define the buffer for demonstration and self-exploration experience
