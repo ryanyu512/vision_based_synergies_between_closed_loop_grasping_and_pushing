@@ -9,10 +9,10 @@ Even though recent robotics research has made great progress, coordination betwe
 **Demo**
 =============
 
-| Proposed System | Grasping-only | 
+| Proposed System | Grasping-only Baseline | 
 |------------|------------|
 | ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9)  |  ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9)
-| Proposed System | Grasping-only | 
+| Sequential Grasp-Push Baseline | Demo Baseline | 
 | ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) |  ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) 
 
 **Code Overview**
