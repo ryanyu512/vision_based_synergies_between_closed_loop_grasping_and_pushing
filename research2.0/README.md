@@ -3,12 +3,12 @@
 **Demo**
 =============
 
-| System   | GIF   |
+| Proposed System | Grasping-only | 
 |------------|------------|
-| HLD mode  | ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9) 
-| Grasping-only  | ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9)
-| Sequential Grasping-Pushing | ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) 
-| Demonstration | ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) 
+| ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9)  |  ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9)
+| Proposed System | Grasping-only | 
+|------------|------------|
+| ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) |  ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) 
 
 **Abstract** 
 ---------------
