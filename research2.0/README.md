@@ -11,11 +11,11 @@ Even though recent robotics research has made great progress, coordination betwe
 
 | Proposed System | Grasping-only Baseline | 
 |-----------------|------------------------|
-| ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9)  |  ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9) |
+| ![hld_mode](https://github.com/ryanyu512/vision_based_synergies_between_closed_loop_grasping_and_pushing/blob/main/research2.0/hld_mode.gif)  |  ![grasp_only](https://github.com/ryanyu512/vision_based_synergies_between_closed_loop_grasping_and_pushing/blob/main/research2.0/grasp_only.gif) |
 
 | Sequential Grasp-Push Baseline | Demo Baseline | 
 |-----------------|------------------------|
-| ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) |  ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) |
+| ![seq_grasp_push](https://github.com/ryanyu512/vision_based_synergies_between_closed_loop_grasping_and_pushing/blob/main/research2.0/seq_grasp_push.gif) |  ![demo_mode](https://github.com/ryanyu512/vision_based_synergies_between_closed_loop_grasping_and_pushing/blob/main/research2.0/demo_mode.gif) |
 
 **Code Overview**
 ---------------
