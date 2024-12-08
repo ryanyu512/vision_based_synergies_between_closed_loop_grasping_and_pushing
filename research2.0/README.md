@@ -3,25 +3,15 @@
 **Demo**
 =============
 
-**Proposed System**
----------------
-
-![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9)
-
-**Grasping-only Baseline**
----------------
-
-![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9)
-
-**Sequential Grasping-Pushing Baseline**
----------------
-
-![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50)
-
-**Demonstration Baseline**
----------------
-
-![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa)
+| System   | GIF   |
+|------------|------------|
+| HLD mode  | ![hld_mode](https://github.com/user-attachments/assets/184f59b2-2e7d-49b3-9ed3-ed7aa1452aa9) 
+|------------|------------|
+| Grasping-only  | ![grasp_only](https://github.com/user-attachments/assets/145ee714-4abf-4b12-91ed-2e16906f4aa9)
+|------------|------------|
+| Sequential Grasping-Pushing | ![seq_grasp_push](https://github.com/user-attachments/assets/3d98b179-fc25-40b0-a441-6bbc0bf0cb50) 
+|------------|------------|
+| Demonstration | ![demo_mode](https://github.com/user-attachments/assets/b218c813-fd4a-485b-8dc5-19f99c7e34aa) 
 
 **Abstract** 
 ---------------
