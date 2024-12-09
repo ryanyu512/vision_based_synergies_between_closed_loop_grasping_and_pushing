@@ -9,6 +9,8 @@ Even though recent robotics research has made great progress, coordination betwe
 **Demo**
 =============
 
+The demo has been sped up 4 times to reduce its size and fit within the repository's storage limit.
+
 | Proposed System | Grasping-only Baseline | 
 |-----------------|------------------------|
 | ![hld_mode](https://github.com/ryanyu512/vision_based_synergies_between_closed_loop_grasping_and_pushing/blob/main/research2.0/hld_mode.gif)  |  ![grasp_only](https://github.com/ryanyu512/vision_based_synergies_between_closed_loop_grasping_and_pushing/blob/main/research2.0/grasp_only.gif) |
