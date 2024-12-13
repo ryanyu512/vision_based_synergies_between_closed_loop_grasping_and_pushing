@@ -376,8 +376,7 @@ class Env():
                                                   self.sim.scripttype_childscript,
                                                   [0,0,255,0],
                                                   item_pos + item_ori + obj_color,
-                                                  [c_item_file, c_shape_name],
-                                                  bytearray())
+                                                  [c_item_file, c_shape_name])
             
             c_shape_handle = fun_out[0][0]
 
