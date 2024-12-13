@@ -425,8 +425,7 @@ class Env():
                                               self.sim.scripttype_childscript,
                                               [0], 
                                               [0.], 
-                                              ['0'], 
-                                              bytearray())
+                                              ['0'])
 
         #get current goal position        
         cur_pos = self.sim.getObjectPosition(self.UR5_goal_handle, 
